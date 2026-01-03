@@ -1,4 +1,4 @@
-FROM php:8.5.0-zts-bookworm
+FROM php:8.5.1
 
 RUN apt update
 RUN apt install -y \
