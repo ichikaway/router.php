@@ -1,0 +1,78 @@
+version: '3.9'
+
+services:
+  alice:
+    build: ./docker/alice
+    container_name: alice-container
+    hostname: Alice
+    tty: true
+    stdin_open: true
+    privileged: true
+    volumes:
+      - ./docker/alice/mnt:/mnt
+    networks:
+      net1:      
+        ipv4_address: 10.0.0.10
+    entrypoint: /mnt/entrypoint.sh
+
+  bob:
+    build: ./docker/alice
+    container_name: bob-container
+    hostname: Bob
+    tty: true
+    stdin_open: true
+    privileged: true
+    volumes:
+      - ./docker/bob/mnt:/mnt
+    networks:
+      net2:      
+        ipv4_address: 10.0.1.10
+    entrypoint: /mnt/entrypoint.sh
+
+  perf:
+    build: ./docker/perf
+    container_name: perf-container
+    hostname: perf 
+    tty: true
+    stdin_open: true
+    privileged: true
+    volumes:
+      - ./docker/bob/mnt:/mnt
+    networks:
+      net2:      
+        ipv4_address: 10.0.1.11
+    entrypoint: /mnt/entrypoint.sh
+
+
+  router:
+    build: ./docker/router
+    container_name: router-container
+    hostname: Router
+    volumes:
+      - ./docker/router/mnt:/mnt
+      - ./src:/src
+    working_dir: /src
+    networks:
+      net1:
+        ipv4_address: 10.0.0.250
+        mac_address: "c2:2b:94:fd:a9:83"
+      net2:      
+        ipv4_address: 10.0.1.250
+        mac_address: "36:a5:d3:e5:0f:5f"
+    sysctls:
+      - net.ipv4.ip_forward=0
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    entrypoint: /mnt/entrypoint.sh
+      
+networks:
+  net1:
+    ipam:
+      config:
+        - subnet: 10.0.0.0/24
+  net2:
+    ipam:
+      config:
+        - subnet: 10.0.1.0/24
