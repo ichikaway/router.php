@@ -1,0 +1,40 @@
+
+docker compose exec router bash
+  10.0.0.250
+  10.0.1.250
+
+docker compose exec alice bash
+  10.0.0.10
+
+ docker compose exec bob bash
+  10.0.1.10
+
+ docker compose exec perf bash
+  10.0.1.11
+
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+
+tshark -i eth0 -V -x
+
+ethtool -K eth0 rx off tx off
+
+## NCコマンド
+Alice
+echo "hello" | nc -u 10.0.1.10 8888
+
+Bob(server)
+nc -u -l 8888
+
+
+## Alice側だけオフロードをオフにするとうまくいく
+Alice offload-checksum on, Bob offload-checksum on -> NG
+Alice offload-checksum on, Bob offload-checksum off -> NG 
+Alice offload-checksum off, Bob offload-checksum off -> ok 
+Alice offload-checksum off, Bob offload-checksum on -> ok
+
+
+  /root/php-src
+ ./configure --enable-sockets --enable-cli --enable-pcntl --disable-pdo  --without-sqlite3 --prefix=/php
+  make -j3
+  make install

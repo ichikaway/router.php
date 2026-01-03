@@ -6,3 +6,4 @@ composer.lock
 src/sample/
 tools
 a.out
+tmp
