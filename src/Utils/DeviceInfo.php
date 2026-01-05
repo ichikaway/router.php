@@ -1,5 +1,7 @@
 <?php
 
+namespace Utils;
+
 /**
  * RouterマシンにあるNICの情報を取得する
  * NICはeth, MACアドレスはLinuxの/sys/class/net/以下の情報から取得する
@@ -13,7 +15,11 @@ class DeviceInfo
             if (preg_match('/eth[0-9]/', $name)) {
                 foreach ($if["unicast"] as $info) {
                     if (isset($info["address"]) && isset($info["netmask"])) {
-                        $nic[] = ['device' => $name, 'mac' => self::macFromIf($name), 'ip' => $info["address"], 'netmask' => $info["netmask"]];
+                        $nic[] = ['device'  => $name,
+                                  'mac'     => self::macFromIf($name),
+                                  'ip'      => $info["address"],
+                                  'netmask' => $info["netmask"]
+                        ];
                     }
                 }
             }
