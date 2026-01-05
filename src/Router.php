@@ -1,5 +1,6 @@
 <?php
 require ('./Utils/functions.php');
+require ('./Utils/Checksum.php');
 
 #if (!defined('IPPROTO_IP')) {
 #    define('IPPROTO_IP', 0);
@@ -243,38 +244,11 @@ function decrementIPv4TtlAndFixChecksum(?string $frame): ?string
     $frame[$cksumPos]     = "\x00";
     $frame[$cksumPos + 1] = "\x00";
 
-    $newChecksum = ipv4HeaderChecksum($frame, $ipStart, $ipHeaderLen);
+    $newChecksum = \Utils\Checksum::ipv4HeaderChecksum($frame, $ipStart, $ipHeaderLen);
 
     // ネットワークバイトオーダーで書き戻し
     $frame[$cksumPos]     = chr(($newChecksum >> 8) & 0xFF);
     $frame[$cksumPos + 1] = chr($newChecksum & 0xFF);
 
     return $frame;
-}
-
-/**
- * IPv4 ヘッダチェックサム（1の補数和）
- * $buf[$start .. $start+$len-1] の 16bit ワードを加算し、キャリー回し、1の補数。
- * ※ チェックサムフィールドは呼び出し元で 0 にしておくこと。
- */
-function ipv4HeaderChecksum(string $buf, int $start, int $len): int
-{
-    $sum = 0;
-
-    for ($i = 0; $i < $len; $i += 2) {
-        $hi = ord($buf[$start + $i]);
-        $lo = ord($buf[$start + $i + 1]);
-        $sum += (($hi << 8) | $lo);
-
-        if ($sum > 0xFFFF) {                // 途中で軽く折返し
-            $sum = ($sum & 0xFFFF) + ($sum >> 16);
-        }
-    }
-
-    // 最終キャリー折返し（2回やる流儀でもOK）
-    while ($sum > 0xFFFF) {
-        $sum = ($sum & 0xFFFF) + ($sum >> 16);
-    }
-
-    return (~$sum) & 0xFFFF;                // 0x0000 もそのまま返す
 }
