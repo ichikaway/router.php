@@ -1,4 +1,5 @@
 <?php
+require ('./Utils/functions.php');
 
 #if (!defined('IPPROTO_IP')) {
 #    define('IPPROTO_IP', 0);
@@ -181,23 +182,6 @@ class Router
     }
 }
 
-
-function macToBinary(string $mac): string {
-    // コロンを削除して連続した16進文字列にする
-    $hex = str_replace(':', '', $mac);
-    // pack() で16進文字列をバイナリ化
-    return pack('H*', $hex);
-}
-
-function hexDump($data, $width = 16) {
-    $len = strlen($data);
-    for ($i = 0; $i < $len; $i += $width) {
-        $chunk = substr($data, $i, $width);
-        $hex = implode(' ', str_split(bin2hex($chunk), 2));
-        $ascii = preg_replace('/[^\x20-\x7E]/', '.', $chunk);
-        printf("    %04x: %-48s %s\n", $i, $hex, $ascii);
-    }
-}
 
 /**
  * 入力: イーサネットフレーム（binary string, socket_read()で得たもの）
