@@ -54,13 +54,14 @@ class Arp
         while(1) {
             $cnt++;
             $recv = socket_read($this->socket, 1024);
-            echo "read\n";
+            //echo bin2hex($recv) . "\n";
+            //echo "read\n";
             if ($recv === false) {
                 return "";
             }
             //自分が送信したフレームも読んでしまうため、自分以外のフレームのみ処理
             if ($recv !== $etherFrame) {
-                $destMac = $this->getDestMac($etherFrame);
+                $destMac = $this->getDestMac($recv, $destIp);
                 if ($destMac !== "") {
                     return $destMac;
                 }
@@ -71,11 +72,32 @@ class Arp
         }
     }
 
-    public function getDestMac(string $data): string
+    public function getDestMac(string $data, string $destIp): string
     {
-        // todo
+        //echo bin2hex($data) . "\n";
+
+        // check arp packet
+        $ethType = unpack("n", substr($data, 12, 2))[1]; // network-order (big endian)
+        if ($ethType !== ETH_P_ARP) {
+            //echo "ethType is not ETH_P_ARP\n";
+            return "";
+        }
+        $arpData = unpack("nhtype/nptype/Chasize/Cpasize/nopcode/H12sourceMac/NsourceIp/H12destMac/NdestIp", $data, 14); //ethernetヘッダを除いたペイロードを対象にするため14バイト以降から抽出
+        //var_dump($arpData);
+
         // check ARP reply
-        // check source IP = dest IP
+        if ($arpData['opcode'] !== self::ARP_REPLY) {
+            return "";
+        }
+
+        // check target IP = arp reply source IP
+        if ($destIp === long2ip($arpData['sourceIp'])) {
+            // get Mac address
+            return $arpData['sourceMac'];
+        }
+        //var_dump(long2ip($arpData['sourceIp']));
+        //var_dump(long2ip($arpData['destIp']));
+        return "";
     }
 
     private function createArpRequestPayload(string $destIp): string
@@ -104,7 +126,7 @@ class Arp
 
     public function __destruct()
     {
-        echo "close socket.\n";
+        //echo "close socket.\n";
         unset($this->socket);
     }
 }

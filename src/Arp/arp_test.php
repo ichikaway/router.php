@@ -15,3 +15,4 @@ $reply = $Arp->sendArpRequest($bob['ip']);
 
 echo "=== reply ===\n";
 var_dump(bin2hex($reply));
+var_dump(hexToMac($reply));
