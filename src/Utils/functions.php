@@ -5,6 +5,12 @@ function macToBinary(string $mac): string {
     return pack('H*', $hex);
 }
 
+function binaryToMac(string $binary): string {
+    // unpack() でバイナリを16進文字列に変換
+    $hex = unpack('H*', $binary)[1];
+    return implode(':', str_split($hex, 2));
+}
+
 function hexDump($data, $width = 16) {
     $len = strlen($data);
     for ($i = 0; $i < $len; $i += $width) {
