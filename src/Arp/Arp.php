@@ -14,9 +14,6 @@ class Arp
 {
     private Socket $socket;
 
-    private string $targetIp;
-    private string $targetMac;
-
     private readonly string $sourceIp;
     private readonly string $sourceMac;
 
