@@ -41,7 +41,7 @@ class Arp
         if ($socket === false) {
             die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
         }
-        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 555, 'usec' => 0]);
+        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 5, 'usec' => 0]);
         $this->socket = $socket;
         socket_bind($this->socket, $nic);
     }
@@ -50,10 +50,23 @@ class Arp
     {
         $etherFrame = $this->createArpRequestPayload($destIp);
         socket_write($this->socket, $etherFrame, strlen($etherFrame));
+        $cnt = 0;
         while(1) {
+            $cnt++;
             $recv = socket_read($this->socket, 1024);
+            echo "read\n";
+            if ($recv === false) {
+                return "";
+            }
+            //自分が送信したフレームも読んでしまうため、自分以外のフレームのみ処理
             if ($recv !== $etherFrame) {
-                return $recv;
+                $destMac = $this->getDestMac($etherFrame);
+                if ($destMac !== "") {
+                    return $destMac;
+                }
+            }
+            if ($cnt > 500) {
+                return "";
             }
         }
     }
