@@ -79,18 +79,20 @@ class Arp
             //echo "ethType is not ETH_P_ARP\n";
             return "";
         }
-        $arpData = unpack("nhtype/nptype/Chasize/Cpasize/nopcode/H12sourceMac/NsourceIp/H12destMac/NdestIp", $data, 14); //ethernetヘッダを除いたペイロードを対象にするため14バイト以降から抽出
+        $arpReplyData = unpack("nhtype/nptype/Chasize/Cpasize/nopcode/H12sourceMac/NsourceIp/H12destMac/NdestIp", $data, 14); //ethernetヘッダを除いたペイロードを対象にするため14バイト以降から抽出
         //var_dump($arpData);
 
         // check ARP reply
-        if ($arpData['opcode'] !== self::ARP_REPLY) {
+        if ($arpReplyData['opcode'] !== self::ARP_REPLY) {
             return "";
         }
 
         // check target IP = arp reply source IP
-        if ($destIp === long2ip($arpData['sourceIp'])) {
+        // 今回送信したARP RequestのIPに対して、そのIPのマシンからARP Replyが返ってきているかIPを比較してチェック
+        // OSが送ったARPなどが混ざる可能性があるため念のためチェックしておく
+        if ($destIp === long2ip($arpReplyData['sourceIp'])) {
             // get Mac address
-            return $arpData['sourceMac'];
+            return $arpReplyData['sourceMac'];
         }
         //var_dump(long2ip($arpData['sourceIp']));
         //var_dump(long2ip($arpData['destIp']));
