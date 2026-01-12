@@ -1,6 +1,12 @@
 <?php
+
+use Network\Netmask;
+use Arp\Arp;
+
 require ('./Utils/functions.php');
 require ('./Utils/Checksum.php');
+require ('./Network/Netmask.php');
+require ('./Arp/Arp.php');
 
 #if (!defined('IPPROTO_IP')) {
 #    define('IPPROTO_IP', 0);
@@ -74,7 +80,7 @@ class Router
                     if ($data === false || $data === '') {
                         echo "タイムアウト: {$readCount} \n";
                     } else {
-                        var_dump("socket_recv buf1: " . bin2hex($data) . "\n");
+                        //var_dump("socket_recv buf1: " . bin2hex($data) . "\n");
                         break 2;
                     }
                 }
@@ -138,52 +144,36 @@ class Router
 
                 // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
                 if (hexToMac($srcMac) === $device['mac']) {
-                    echo "packet from my nic(eth0). nothing to do. \n";
-                    continue;
+                    echo "packet from my NIC({$device['device']}). nothing to do. \n";
+                    continue 2;
                 }
             }
-
-            $alice = ['ip' => '10.0.0.10', 'mac' => '0e:3d:9c:cc:d3:ba'];
-            $bob = ['ip' => '10.0.1.10', 'mac' => '12:59:0c:af:36:54'];
 
             var_dump($srcMac);
             var_dump(str_replace(':', '', $this->nic[0]['mac']));
 
-            if ($dstIp === $bob['ip']) {
-                echo "routing from alice to bob. \n";
-                $dstPkt = $pkt;
-                $srcNewMac = macToBinary($this->nic[1]['mac']);
-                $dstNewMac = macToBinary($bob['mac']);
-                $dstPkt = substr_replace($dstPkt, $dstNewMac . $srcNewMac, 0, 12);
+            // 宛先IPを見て、自分と同じサブネットのIPアドレスであれば、該当NICからARPを送ってMACアドレスを取得
+            // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
+            foreach($this->devices as $device) {
+                if (Netmask::isSameNetwork($dstIp, $device['ip'], $device['netmask'])) {
+                    echo "NIC is {$device['device']}, DestIP: {$dstIp}, NIC IP: {$device['ip']} \n";
+                    $Arp = new Arp($device['ip'], $device['mac'], $device['device']);
+                    $dstNewMac = $Arp->sendArpRequest($dstIp);
+                    echo "=== ARP reply ===\n";
+                    var_dump("Dest MAC(bin2hex: " . bin2hex($dstNewMac));
+                    var_dump("Dest MAC(hexToMac): " . hexToMac($dstNewMac));
 
-                $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
-                if ($dstPkt == null) {
-                    continue;
-                }
-                //socket_sendto($this->socket1, $dstPkt, strlen($dstPkt), 0, $dstIp, 0);
-                //socket_send($this->socket1, $dstPkt, strlen($dstPkt), 0);
-                socket_write($this->sockets['eth1'], $dstPkt, strlen($dstPkt));
-                //hexDump($pkt);
-                //hexDump($dstPkt);
-                continue;
-            }
-            if ($dstIp === $alice['ip']) {
-                echo "routing from bob to alice. \n";
-                $dstPkt = $pkt;
-                $srcNewMac = macToBinary($this->nic[0]['mac']);
-                $dstNewMac = macToBinary($alice['mac']);
-                $dstPkt = substr_replace($dstPkt, $dstNewMac . $srcNewMac, 0, 12);
+                    $dstPkt = $pkt;
+                    $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac), 0, 6);
 
-                $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
-                if ($dstPkt == null) {
-                    continue;
+                    $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
+                    if ($dstPkt == null) {
+                        echo "dstPkt is null\n";
+                        continue;
+                    }
+                    socket_write($this->sockets[$device['device']], $dstPkt, strlen($dstPkt));
+                    break;
                 }
-                //socket_sendto($this->socket1, $dstPkt, strlen($dstPkt), 0, $dstIp, 0);
-                //socket_send($this->socket1, $dstPkt, strlen($dstPkt), 0);
-                socket_write($this->sockets['eth0'], $dstPkt, strlen($dstPkt));
-                //hexDump($pkt);
-                //hexDump($dstPkt);
-                continue;
             }
         }
     }
