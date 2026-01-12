@@ -30,29 +30,29 @@ class Router
 
     private array $nic = [];
 
+    private readonly array $devices;
+    private readonly array $sockets;
+
     public function __construct(array $nic)
     {
         $this->nic = $nic;
 
-        $socket0 = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
-        if ($socket0 === false) {
-            die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
+        $devices = [];
+        $sockets = [];
+
+        foreach ($nic as $k => $nicInfo) {
+            $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
+            if ($socket === false) {
+                die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
+            }
+            socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 1, 'usec' => 0]);
+            socket_bind($socket, $nicInfo['device']);
+
+            $sockets[$nicInfo['device']] = $socket;
+            $devices[$nicInfo['device']] = $nicInfo;
         }
-        socket_set_option($socket0, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 555, 'usec' => 0]);
-
-        $socket1 = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
-        if ($socket1 === false) {
-            die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
-        }
-        socket_set_option($socket1, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 555, 'usec' => 0]);
-
-        $this->socket0 = $socket0;
-        $this->socket1 = $socket1;
-
-        //SO_BINDTODEVICE でNICをbindする方法はPHPでは利用できなかったため、socket_bindを使う
-        //$a = socket_set_option($socket0, SOL_SOCKET, SO_BINDTODEVICE, "eth0");
-        socket_bind($this->socket0, 'eth0');
-        socket_bind($this->socket1, 'eth1');
+        $this->sockets = $sockets;
+        $this->devices = $devices;
     }
 
     public function start()
@@ -60,28 +60,33 @@ class Router
         $cnt = 0;
         while (true) {
             echo "\n ===== start receive =====\n";
-            $buf  = '';
-            $from = '';
-            $port = 0;
-
             $cnt++;
 
             // 受信バッファサイズを定義
             //$data = @socket_recv($this->socket, $buf, 1000, 0);
-            if ($cnt % 2) {
-                echo "read from socket0 \n";
-                $data = @socket_read($this->socket0, 8000);
-            } else {
-                echo "read from socket1 \n";
-                $data = @socket_read($this->socket1, 8000);
+
+            // データ受信. スレッドは使わないためnicを順番にreadして最大1秒でタイムアウトさせて次のnicから読み込み
+            $data = null;
+            for($readCount = 0 ; true; $readCount++) {
+                foreach ($this->sockets as $nicName => $socket) {
+                    echo "read from {$nicName} \n";
+                    $data = @socket_read($socket, 8000);
+                    if ($data === false || $data === '') {
+                        echo "タイムアウト: {$readCount} \n";
+                    } else {
+                        var_dump("socket_recv buf1: " . bin2hex($data) . "\n");
+                        break 2;
+                    }
+                }
+                if ($readCount > 10) {
+                    echo "タイムアウト: TCPパケットを受信できませんでした。\n";
+                    return $data;
+                }
             }
-            if ($data === false) {
-                echo "タイムアウト: TCPパケットを受信できませんでした。\n";
-                return $data;
-            }
+
             var_dump("socket_recv buf: " . bin2hex($data) . "\n");
 
-            $ip_header_length = (ord($buf[0]) & 0x0F) * 4;  // IPヘッダーの長さを取得
+            $ip_header_length = (ord($data[0]) & 0x0F) * 4;  // IPヘッダーの長さを取得
             $tcp_header_start = $ip_header_length;  // TCPヘッダーの開始位置
 
             // --- Ethernet header (14 bytes)
@@ -118,14 +123,24 @@ class Router
             hexDump($payload) ;
 
             //todo
-            // 自分のNIC宛のIPアドレスの場合はスルーする。
             // 自分以外のIPの場合は、該当のIPと同じネットワークのNICに流す
             //  - 該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
             //  - 宛先IPのMACアドレスを、送信パケットの送信先MACに設定
             //  - IPヘッダのTTLを一つ減らしてチェックサムを再計算する
-            if (in_array($this->nic[0]['ip'], [$srcIp, $dstIp]) || in_array($this->nic[1]['ip'], [$srcIp, $dstIp])) {
-                echo "same IP of NIC\n";
-                continue;
+
+
+            foreach($this->devices as $device) {
+                // 自分のNIC宛のIPアドレスの場合はスルーする。
+                if (in_array($device['ip'], [$srcIp, $dstIp])) {
+                    echo "same IP of NIC\n";
+                    continue 2; // whileループのcontinueを行う
+                }
+
+                // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
+                if (hexToMac($srcMac) === $device['mac']) {
+                    echo "packet from my nic(eth0). nothing to do. \n";
+                    continue;
+                }
             }
 
             $alice = ['ip' => '10.0.0.10', 'mac' => '0e:3d:9c:cc:d3:ba'];
@@ -133,15 +148,6 @@ class Router
 
             var_dump($srcMac);
             var_dump(str_replace(':', '', $this->nic[0]['mac']));
-            // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
-            if ($srcMac === str_replace(':', '', $this->nic[0]['mac'])) {
-                echo "packet from my nic(eth0). nothing to do. \n";
-                continue;
-            }
-            if ($srcMac === str_replace(':', '', $this->nic[1]['mac'])) {
-                echo "packet from my nic(eth1). nothing to do. \n";
-                continue;
-            }
 
             if ($dstIp === $bob['ip']) {
                 echo "routing from alice to bob. \n";
@@ -156,7 +162,7 @@ class Router
                 }
                 //socket_sendto($this->socket1, $dstPkt, strlen($dstPkt), 0, $dstIp, 0);
                 //socket_send($this->socket1, $dstPkt, strlen($dstPkt), 0);
-                socket_write($this->socket1, $dstPkt, strlen($dstPkt));
+                socket_write($this->sockets['eth1'], $dstPkt, strlen($dstPkt));
                 //hexDump($pkt);
                 //hexDump($dstPkt);
                 continue;
@@ -174,7 +180,7 @@ class Router
                 }
                 //socket_sendto($this->socket1, $dstPkt, strlen($dstPkt), 0, $dstIp, 0);
                 //socket_send($this->socket1, $dstPkt, strlen($dstPkt), 0);
-                socket_write($this->socket0, $dstPkt, strlen($dstPkt));
+                socket_write($this->sockets['eth0'], $dstPkt, strlen($dstPkt));
                 //hexDump($pkt);
                 //hexDump($dstPkt);
                 continue;
