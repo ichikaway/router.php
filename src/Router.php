@@ -63,6 +63,7 @@ class Router
 
     public function start()
     {
+        var_dump($this->devices);
         $cnt = 0;
         while (true) {
             echo "\n ===== start receive =====\n";
@@ -128,11 +129,6 @@ class Router
 
             hexDump($payload) ;
 
-            //todo
-            // 自分以外のIPの場合は、該当のIPと同じネットワークのNICに流す
-            //  - 該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
-            //  - 宛先IPのMACアドレスを、送信パケットの送信先MACに設定
-            //  - IPヘッダのTTLを一つ減らしてチェックサムを再計算する
 
 
             foreach($this->devices as $device) {
@@ -156,6 +152,7 @@ class Router
             // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
             foreach($this->devices as $device) {
                 if (Netmask::isSameNetwork($dstIp, $device['ip'], $device['netmask'])) {
+
                     echo "NIC is {$device['device']}, DestIP: {$dstIp}, NIC IP: {$device['ip']} \n";
                     $Arp = new Arp($device['ip'], $device['mac'], $device['device']);
                     $dstNewMac = $Arp->sendArpRequest($dstIp);
@@ -163,9 +160,15 @@ class Router
                     var_dump("Dest MAC(bin2hex: " . bin2hex($dstNewMac));
                     var_dump("Dest MAC(hexToMac): " . hexToMac($dstNewMac));
 
+                    //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
+                    //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
                     $dstPkt = $pkt;
-                    $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac), 0, 6);
+                    $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($device['mac']), 0, 12);
+                    echo "dstPkt: " . bin2hex($dstPkt) . "\n";
+                    echo "dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n";
+                    echo "dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n";
 
+                    //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
                     $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
                     if ($dstPkt == null) {
                         echo "dstPkt is null\n";
