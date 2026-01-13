@@ -5,32 +5,8 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use Network\Netmask;
 use Arp\Arp;
 
-#if (!defined('IPPROTO_IP')) {
-#    define('IPPROTO_IP', 0);
-#}
-if (!defined('IPPROTO_ICMP')) {
-    define('IPPROTO_ICMP', 1);
-}
-if (!defined('IPPROTO_TCP')) {
-    define('IPPROTO_TCP', 6);
-}
-if (!defined('IPPROTO_UDP')) {
-    define('IPPROTO_UDP', 17);
-}
-
-//define('AF_PACKET', 17);
-//define('ETH_P_IP', 0x0800);
-//define('ETH_P_ALL', 0x0003);
-//define('SOL_PACKET', 263);
-//define('PACKET_ADD_MEMBERSHIP', 1);
-//define('PACKET_MR_PROMISC', 1);
-
 class Router
 {
-    private $socket0;
-
-    private $socket1;
-
     private array $nic = [];
 
     private readonly array $devices;
@@ -61,13 +37,8 @@ class Router
     public function start()
     {
         var_dump($this->devices);
-        $cnt = 0;
         while (true) {
             echo "\n ===== start receive =====\n";
-            $cnt++;
-
-            // 受信バッファサイズを定義
-            //$data = @socket_recv($this->socket, $buf, 1000, 0);
 
             // データ受信. スレッドは使わないためnicを順番にreadして最大1秒でタイムアウトさせて次のnicから読み込み
             $data = null;
@@ -78,7 +49,6 @@ class Router
                     if ($data === false || $data === '') {
                         echo "タイムアウト: {$readCount} \n";
                     } else {
-                        //var_dump("socket_recv buf1: " . bin2hex($data) . "\n");
                         break 2;
                     }
                 }
