@@ -4,8 +4,6 @@ namespace Arp;
 
 use Socket;
 
-//require ('../Utils/functions.php');
-
 if (!defined('ETH_P_ARP')) {
     define('ETH_P_ARP', 0x0806);
 }

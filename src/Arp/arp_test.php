@@ -2,6 +2,7 @@
 
 use Arp\Arp;
 
+require ('../Utils/functions.php');
 require ('../Utils/DeviceInfo.php');
 require ('./Arp.php');
 
