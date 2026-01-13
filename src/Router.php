@@ -1,12 +1,9 @@
 <?php
 
+require_once __DIR__ . '/../vendor/autoload.php';
+
 use Network\Netmask;
 use Arp\Arp;
-
-require ('./Utils/functions.php');
-require ('./Utils/Checksum.php');
-require ('./Network/Netmask.php');
-require ('./Arp/Arp.php');
 
 #if (!defined('IPPROTO_IP')) {
 #    define('IPPROTO_IP', 0);

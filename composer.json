@@ -1,0 +1,24 @@
+{
+    "name": "ichikaway/router.php",
+    "description": "IP router implemented in PHP",
+    "type": "project",
+    "keywords": [
+      "router",
+      "ip",
+      "network",
+      "tcp",
+      "php"
+    ],
+    "require": {
+        "php": ">=8.5",
+        "ext-sockets": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "": "src/"
+        },
+        "files": [
+            "src/Utils/functions.php"
+        ]
+    }
+}

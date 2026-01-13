@@ -1,9 +1,8 @@
 <?php
 
-use Utils\DeviceInfo;
+require_once __DIR__ . '/../vendor/autoload.php';
 
-require './Utils/DeviceInfo.php';
-require './Router.php';
+use Utils\DeviceInfo;
 
 $nic = (new DeviceInfo())->getDevice();
 $router = new Router($nic);

@@ -50,8 +50,8 @@ services:
     hostname: Router
     volumes:
       - ./docker/router/mnt:/mnt
-      - ./src:/src
-    working_dir: /src
+      - ./:/router
+    working_dir: /router
     networks:
       net1:
         ipv4_address: 10.0.0.250
