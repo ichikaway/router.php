@@ -155,9 +155,10 @@ class Router
 
     private function getMacAddress(string $dstIp, string $ip, string $mac, string $device): string
     {
-        if ($this->arpTable->get($dstIp) !== null) {
+        $resultFromCache = $this->arpTable->get($dstIp);
+        if ($resultFromCache !== null) {
             echo "Hit arp table. IP: {$dstIp},\n";
-            return $this->arpTable->get($dstIp);
+            return $resultFromCache;
         }
         $Arp = new Arp($ip, $mac, $device);
         $dstNewMac = $Arp->sendArpRequest($dstIp);
