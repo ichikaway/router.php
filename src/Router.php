@@ -4,10 +4,13 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 use Network\Netmask;
 use Arp\Arp;
+use Arp\ArpCache;
 
 class Router
 {
     private array $nic = [];
+
+    private ArpCache $arpTable;
 
     private readonly array $devices;
     private readonly array $sockets;
@@ -18,6 +21,8 @@ class Router
 
         $devices = [];
         $sockets = [];
+
+        $this->arpTable = new ArpCache();
 
         foreach ($nic as $k => $nicInfo) {
             $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
@@ -121,11 +126,11 @@ class Router
                 if (Netmask::isSameNetwork($dstIp, $device['ip'], $device['netmask'])) {
 
                     echo "NIC is {$device['device']}, DestIP: {$dstIp}, NIC IP: {$device['ip']} \n";
-                    $Arp = new Arp($device['ip'], $device['mac'], $device['device']);
-                    $dstNewMac = $Arp->sendArpRequest($dstIp);
-                    echo "=== ARP reply ===\n";
-                    var_dump("Dest MAC(bin2hex: " . bin2hex($dstNewMac));
-                    var_dump("Dest MAC(hexToMac): " . hexToMac($dstNewMac));
+                    $dstNewMac = $this->getMacAddress($dstIp, $device['ip'], $device['mac'], $device['device']);
+                    if ($dstNewMac === null) {
+                        echo "Error dstNewMac is Null, IP: {$dstIp} \n";
+                        continue 2;
+                    }
 
                     //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
                     //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
@@ -146,6 +151,28 @@ class Router
                 }
             }
         }
+    }
+
+    private function getMacAddress(string $dstIp, string $ip, string $mac, string $device): ?string
+    {
+        if ($this->arpTable->get($dstIp) !== null) {
+            echo "Hit arp table. IP: {$dstIp},\n";
+            return $this->arpTable->get($dstIp);
+        }
+        $Arp = new Arp($ip, $mac, $device);
+        $dstNewMac = $Arp->sendArpRequest($dstIp);
+
+        if ($dstNewMac === '') {
+            return null;
+        }
+
+        $this->arpTable->add($dstIp, $dstNewMac);
+
+        echo "=== ARP reply ===\n";
+        var_dump("Dest MAC(bin2hex: " . bin2hex($dstNewMac));
+        var_dump("Dest MAC(hexToMac): " . hexToMac($dstNewMac));
+
+        return $dstNewMac;
     }
 }
 
