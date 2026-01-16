@@ -127,7 +127,7 @@ class Router
 
                     echo "NIC is {$device['device']}, DestIP: {$dstIp}, NIC IP: {$device['ip']} \n";
                     $dstNewMac = $this->getMacAddress($dstIp, $device['ip'], $device['mac'], $device['device']);
-                    if ($dstNewMac === null) {
+                    if ($dstNewMac === '') {
                         echo "Error dstNewMac is Null, IP: {$dstIp} \n";
                         continue 2;
                     }
@@ -153,7 +153,7 @@ class Router
         }
     }
 
-    private function getMacAddress(string $dstIp, string $ip, string $mac, string $device): ?string
+    private function getMacAddress(string $dstIp, string $ip, string $mac, string $device): string
     {
         if ($this->arpTable->get($dstIp) !== null) {
             echo "Hit arp table. IP: {$dstIp},\n";
@@ -163,7 +163,7 @@ class Router
         $dstNewMac = $Arp->sendArpRequest($dstIp);
 
         if ($dstNewMac === '') {
-            return null;
+            return '';
         }
 
         $this->arpTable->add($dstIp, $dstNewMac);
