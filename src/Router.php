@@ -39,8 +39,9 @@ class Router
         $this->devices = $devices;
     }
 
-    private function readData(): ?string {
+    private function readData(): ?array {
         $data = null;
+        $readData = [];
         $read = array_values($this->sockets);
         $write = null;
         $except = null;
@@ -56,8 +57,10 @@ class Router
             //イーサフレームは1514バイトだが、ジャンボフレームなども考慮して65535にした
             $data = @socket_read($socket, 65535);
             if ($data === false || $data === '') {
-                echo "read timeout \n";
-                return null;
+                echo "read timeout or error \n";
+            } else {
+                var_dump("socket_recv buf: " . bin2hex($data) . "\n");
+                $readData[] = $data;
             }
         }
 
@@ -82,9 +85,7 @@ class Router
         }
         */
 
-        var_dump("socket_recv buf: " . bin2hex($data) . "\n");
-
-        return $data;
+        return $readData;
     }
     public function start()
     {
@@ -92,96 +93,99 @@ class Router
         while (true) {
             echo "\n ===== start receive =====\n";
 
-            $data = $this->readData();
-            if ($data === null) {
+            $readData = $this->readData();
+            if ($readData === null) {
                 continue;
             }
 
-            $ip_header_length = (ord($data[0]) & 0x0F) * 4;  // IPヘッダーの長さを取得
-            $tcp_header_start = $ip_header_length;  // TCPヘッダーの開始位置
+            foreach ($readData as $data) {
+                $ip_header_length = (ord($data[0]) & 0x0F) * 4;  // IPヘッダーの長さを取得
+                $tcp_header_start = $ip_header_length;  // TCPヘッダーの開始位置
 
-            // --- Ethernet header (14 bytes)
-            $pkt = $data;
-            $dstMac = unpack("H*", substr($pkt, 0, 6))[1];
-            $srcMac = unpack("H*", substr($pkt, 6, 6))[1];
-            $ethType = unpack("n", substr($pkt, 12, 2))[1]; // network-order (big endian)
+                // --- Ethernet header (14 bytes)
+                $pkt = $data;
+                $dstMac = unpack("H*", substr($pkt, 0, 6))[1];
+                $srcMac = unpack("H*", substr($pkt, 6, 6))[1];
+                $ethType = unpack("n", substr($pkt, 12, 2))[1]; // network-order (big endian)
 
-            echo "  EtherType: 0x" . dechex($ethType) . "\n";
-            echo "  Src MAC: " . chunk_split($srcMac, 2, ':') . "\n";
-            echo "  Dst MAC: " . chunk_split($dstMac, 2, ':') . "\n";
+                echo "  EtherType: 0x" . dechex($ethType) . "\n";
+                echo "  Src MAC: " . chunk_split($srcMac, 2, ':') . "\n";
+                echo "  Dst MAC: " . chunk_split($dstMac, 2, ':') . "\n";
 
-            if ($ethType !== 0x0800) {
-                echo "  Not IPv4, skipping...\n";
-                continue;
-            }
-
-            // --- IPv4 header (starts at byte 14)
-            $ipHeader = substr($pkt, 14, 20); // IHL によっては20〜60バイト
-            $ip = unpack("Cversion_ihl/Ctos/nlength/nid/nflags_offset/Cttl/Cproto/nchecksum/Nsrc/Ndst", $ipHeader);
-
-            $ihl = $ip["version_ihl"] & 0x0F;
-            $ipHeaderLen = $ihl * 4;
-
-            $srcIp = long2ip($ip["src"]);
-            $dstIp = long2ip($ip["dst"]);
-
-            echo "  IP: $srcIp → $dstIp, proto: {$ip['proto']}, TTL: {$ip['ttl']}\n";
-
-            // --- データ部を抽出
-            $payload = substr($pkt, 14 + $ipHeaderLen);
-            echo "  Payload size: " . strlen($payload) . " bytes\n";
-
-            hexDump($payload) ;
-
-
-
-            foreach($this->devices as $device) {
-                // 自分のNIC宛のIPアドレスの場合はスルーする。
-                if (in_array($device['ip'], [$srcIp, $dstIp])) {
-                    echo "same IP of NIC\n";
-                    continue 2; // whileループのcontinueを行う
+                if ($ethType !== 0x0800) {
+                    echo "  Not IPv4, skipping...\n";
+                    continue ;
                 }
 
-                // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
-                if (hexToMac($srcMac) === $device['mac']) {
-                    echo "packet from my NIC({$device['device']}). nothing to do. \n";
-                    continue 2;
-                }
-            }
+                // --- IPv4 header (starts at byte 14)
+                $ipHeader = substr($pkt, 14, 20); // IHL によっては20〜60バイト
+                $ip = unpack("Cversion_ihl/Ctos/nlength/nid/nflags_offset/Cttl/Cproto/nchecksum/Nsrc/Ndst", $ipHeader);
 
-            var_dump($srcMac);
-            var_dump(str_replace(':', '', $this->nic[0]['mac']));
+                $ihl = $ip["version_ihl"] & 0x0F;
+                $ipHeaderLen = $ihl * 4;
 
-            // 宛先IPを見て、自分と同じサブネットのIPアドレスであれば、該当NICからARPを送ってMACアドレスを取得
-            // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
-            foreach($this->devices as $device) {
-                if (Netmask::isSameNetwork($dstIp, $device['ip'], $device['netmask'])) {
+                $srcIp = long2ip($ip["src"]);
+                $dstIp = long2ip($ip["dst"]);
 
-                    echo "NIC is {$device['device']}, DestIP: {$dstIp}, NIC IP: {$device['ip']} \n";
-                    $dstNewMac = $this->getMacAddress($dstIp, $device['ip'], $device['mac'], $device['device']);
-                    if ($dstNewMac === '') {
-                        echo "Error dstNewMac is Null, IP: {$dstIp} \n";
+                echo "  IP: $srcIp → $dstIp, proto: {$ip['proto']}, TTL: {$ip['ttl']}\n";
+
+                // --- データ部を抽出
+                $payload = substr($pkt, 14 + $ipHeaderLen);
+                echo "  Payload size: " . strlen($payload) . " bytes\n";
+
+                hexDump($payload) ;
+
+
+
+                foreach($this->devices as $device) {
+                    // 自分のNIC宛のIPアドレスの場合はスルーする。
+                    if (in_array($device['ip'], [$srcIp, $dstIp])) {
+                        echo "same IP of NIC\n";
+                        continue 2; // whileループのcontinueを行う
+                    }
+
+                    // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
+                    if (hexToMac($srcMac) === $device['mac']) {
+                        echo "packet from my NIC({$device['device']}). nothing to do. \n";
                         continue 2;
                     }
+                }
 
-                    //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
-                    //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
-                    $dstPkt = $pkt;
-                    $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($device['mac']), 0, 12);
-                    echo "dstPkt: " . bin2hex($dstPkt) . "\n";
-                    echo "dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n";
-                    echo "dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n";
+                var_dump($srcMac);
+                var_dump(str_replace(':', '', $this->nic[0]['mac']));
 
-                    //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
-                    $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
-                    if ($dstPkt == null) {
-                        echo "dstPkt is null\n";
-                        continue;
+                // 宛先IPを見て、自分と同じサブネットのIPアドレスであれば、該当NICからARPを送ってMACアドレスを取得
+                // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
+                foreach($this->devices as $device) {
+                    if (Netmask::isSameNetwork($dstIp, $device['ip'], $device['netmask'])) {
+
+                        echo "NIC is {$device['device']}, DestIP: {$dstIp}, NIC IP: {$device['ip']} \n";
+                        $dstNewMac = $this->getMacAddress($dstIp, $device['ip'], $device['mac'], $device['device']);
+                        if ($dstNewMac === '') {
+                            echo "Error dstNewMac is Null, IP: {$dstIp} \n";
+                            continue 2;
+                        }
+
+                        //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
+                        //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
+                        $dstPkt = $pkt;
+                        $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($device['mac']), 0, 12);
+                        echo "dstPkt: " . bin2hex($dstPkt) . "\n";
+                        echo "dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n";
+                        echo "dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n";
+
+                        //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
+                        $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
+                        if ($dstPkt == null) {
+                            echo "dstPkt is null\n";
+                            continue;
+                        }
+                        socket_write($this->sockets[$device['device']], $dstPkt, strlen($dstPkt));
+                        break;
                     }
-                    socket_write($this->sockets[$device['device']], $dstPkt, strlen($dstPkt));
-                    break;
                 }
             }
+
         }
     }
 
