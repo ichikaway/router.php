@@ -58,7 +58,8 @@ class Router
             foreach ($read as $socket) {
                 $nicName = array_search($socket, $this->sockets, true);
                 echo "read from {$nicName} \n";
-                $data = @socket_read($socket, 8000);
+                //イーサフレームは1514バイトだが、ジャンボフレームなども考慮して65535にした
+                $data = @socket_read($socket, 65535);
                 if ($data === false || $data === '') {
                     echo "read timeout \n";
                     continue 2;
