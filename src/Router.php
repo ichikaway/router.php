@@ -29,7 +29,7 @@ class Router
             if ($socket === false) {
                 die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
             }
-            socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 1, 'usec' => 0]);
+            socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 5, 'usec' => 0]);
             socket_bind($socket, $nicInfo['device']);
 
             $sockets[$nicInfo['device']] = $socket;
@@ -45,6 +45,27 @@ class Router
         while (true) {
             echo "\n ===== start receive =====\n";
 
+            $data = null;
+            $read = array_values($this->sockets);
+            $write = null;
+            $except = null;
+            socket_select($read, $write, $except, 10);
+
+            if (count($read) === 0) {
+                echo "socket select again.\n";
+                continue;
+            }
+            foreach ($read as $socket) {
+                $nicName = array_search($socket, $this->sockets, true);
+                echo "read from {$nicName} \n";
+                $data = @socket_read($socket, 8000);
+                if ($data === false || $data === '') {
+                    echo "read timeout \n";
+                    continue 2;
+                }
+            }
+
+            /*
             // データ受信. スレッドは使わないためnicを順番にreadして最大1秒でタイムアウトさせて次のnicから読み込み
             $data = null;
             for($readCount = 0 ; true; $readCount++) {
@@ -62,6 +83,7 @@ class Router
                     return $data;
                 }
             }
+            */
 
             var_dump("socket_recv buf: " . bin2hex($data) . "\n");
 
