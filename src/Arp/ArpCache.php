@@ -8,7 +8,7 @@ class ArpCache
     private array $arpTable;
 
     private int $expireCount = 0;
-    private int $expireLimit = 20;
+    private int $expireLimit = 2000000;
 
     public function __construct()
     {
