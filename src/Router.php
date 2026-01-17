@@ -39,54 +39,63 @@ class Router
         $this->devices = $devices;
     }
 
+    private function readData(): ?string {
+        $data = null;
+        $read = array_values($this->sockets);
+        $write = null;
+        $except = null;
+        socket_select($read, $write, $except, 10);
+
+        if (count($read) === 0) {
+            echo "socket select again.\n";
+            return null;
+        }
+        foreach ($read as $socket) {
+            $nicName = array_search($socket, $this->sockets, true);
+            echo "read from {$nicName} \n";
+            //イーサフレームは1514バイトだが、ジャンボフレームなども考慮して65535にした
+            $data = @socket_read($socket, 65535);
+            if ($data === false || $data === '') {
+                echo "read timeout \n";
+                return null;
+            }
+        }
+
+        /*
+        // 低速版の処理。
+        // データ受信. スレッドは使わないためnicを順番にreadして最大1秒でタイムアウトさせて次のnicから読み込み
+        $data = null;
+        for($readCount = 0 ; true; $readCount++) {
+            foreach ($this->sockets as $nicName => $socket) {
+                echo "read from {$nicName} \n";
+                $data = @socket_read($socket, 8000);
+                if ($data === false || $data === '') {
+                    echo "タイムアウト: {$readCount} \n";
+                } else {
+                    break 2;
+                }
+            }
+            if ($readCount > 10) {
+                echo "タイムアウト: TCPパケットを受信できませんでした。\n";
+                return $data;
+            }
+        }
+        */
+
+        var_dump("socket_recv buf: " . bin2hex($data) . "\n");
+
+        return $data;
+    }
     public function start()
     {
         var_dump($this->devices);
         while (true) {
             echo "\n ===== start receive =====\n";
 
-            $data = null;
-            $read = array_values($this->sockets);
-            $write = null;
-            $except = null;
-            socket_select($read, $write, $except, 10);
-
-            if (count($read) === 0) {
-                echo "socket select again.\n";
+            $data = $this->readData();
+            if ($data === null) {
                 continue;
             }
-            foreach ($read as $socket) {
-                $nicName = array_search($socket, $this->sockets, true);
-                echo "read from {$nicName} \n";
-                //イーサフレームは1514バイトだが、ジャンボフレームなども考慮して65535にした
-                $data = @socket_read($socket, 65535);
-                if ($data === false || $data === '') {
-                    echo "read timeout \n";
-                    continue 2;
-                }
-            }
-
-            /*
-            // データ受信. スレッドは使わないためnicを順番にreadして最大1秒でタイムアウトさせて次のnicから読み込み
-            $data = null;
-            for($readCount = 0 ; true; $readCount++) {
-                foreach ($this->sockets as $nicName => $socket) {
-                    echo "read from {$nicName} \n";
-                    $data = @socket_read($socket, 8000);
-                    if ($data === false || $data === '') {
-                        echo "タイムアウト: {$readCount} \n";
-                    } else {
-                        break 2;
-                    }
-                }
-                if ($readCount > 10) {
-                    echo "タイムアウト: TCPパケットを受信できませんでした。\n";
-                    return $data;
-                }
-            }
-            */
-
-            var_dump("socket_recv buf: " . bin2hex($data) . "\n");
 
             $ip_header_length = (ord($data[0]) & 0x0F) * 4;  // IPヘッダーの長さを取得
             $tcp_header_start = $ip_header_length;  // TCPヘッダーの開始位置
