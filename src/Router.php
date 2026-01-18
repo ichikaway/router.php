@@ -42,7 +42,9 @@ class Router
             if ($socket === false) {
                 die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
             }
-            socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 5, 'usec' => 0]);
+            //socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 5, 'usec' => 0]);
+            socket_set_nonblock($socket);
+            //socket_set_option($socket, SOL_SOCKET, SO_SNDBUF, 10*1024*1024);
             socket_bind($socket, $nicInfo['device']);
 
             $sockets[$nicInfo['device']] = $socket;
@@ -68,6 +70,9 @@ class Router
             $this->Dump->debug("socket select again.\n");
             return null;
         }
+
+        /*
+        // 1回のselectで1回のreadのみ実行
         foreach ($read as $socket) {
             //$nicName = array_search($socket, $this->sockets, true);
             //$this->Dump->debug("read from {$nicName} \n");
@@ -81,6 +86,43 @@ class Router
             } else {
                 $this->Dump->debug("socket_recv buf: " . bin2hex($data) . "\n");
                 $readData[] = $data;
+            }
+        }
+        */
+
+        //Drain read
+        // 1回のselectで届いたイーサフレームをできるかぎりreadする
+        foreach ($read as $socket) {
+            $n = 0;
+
+            while (true) {
+                $buf = '';
+                $ret = @socket_recv($socket, $buf, 2048, 0); // 1 recv = 1 frame
+
+                //$this->Dump->debug("socket_recv buf: " . bin2hex($buf) . "\n");
+                if ($ret === false) {
+                    $err = socket_last_error($socket);
+
+                    // EAGAIN/EWOULDBLOCK: もう読み尽くした
+                    if ($err === SOCKET_EAGAIN || $err === SOCKET_EWOULDBLOCK) {
+                        socket_clear_error($socket);
+                        break;
+                    }
+
+                    // それ以外はエラーとして扱う
+                    throw new RuntimeException("socket_recv error: " . socket_strerror($err));
+                }
+
+                if ($ret === 0) {
+                    // RAW/AF_PACKETで 0 は基本出にくいが、念のため脱出
+                    break;
+                }
+
+                $readData[] = $buf;
+                // 飢餓防止（他ソケットのチャンスを残す）
+                if (++$n >= 200) { // 上限は調整
+                    break;
+                }
             }
         }
 
