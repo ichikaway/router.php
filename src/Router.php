@@ -2,6 +2,7 @@
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
+use Dump\Dump;
 use Network\Netmask;
 use Arp\Arp;
 use Arp\ArpCache;
@@ -15,8 +16,12 @@ class Router
     private readonly array $devices;
     private readonly array $sockets;
 
-    public function __construct(array $nic)
+    private Dump $Dump;
+
+    public function __construct(array $nic, Dump $dump)
     {
+        $this->Dump = $dump;
+
         $this->nic = $nic;
 
         $devices = [];
@@ -40,7 +45,6 @@ class Router
     }
 
     private function readData(): ?array {
-        $data = null;
         $readData = [];
         $read = array_values($this->sockets);
         $write = null;
@@ -48,18 +52,18 @@ class Router
         socket_select($read, $write, $except, 10);
 
         if (count($read) === 0) {
-            echo "socket select again.\n";
+            $this->Dump->debug("socket select again.\n");
             return null;
         }
         foreach ($read as $socket) {
             $nicName = array_search($socket, $this->sockets, true);
-            echo "read from {$nicName} \n";
+            $this->Dump->debug("read from {$nicName} \n");
             //イーサフレームは1514バイトだが、ジャンボフレームなども考慮して65535にした
             $data = @socket_read($socket, 65535);
             if ($data === false || $data === '') {
-                echo "read timeout or error \n";
+                $this->Dump->error("read timeout or error \n");
             } else {
-                var_dump("socket_recv buf: " . bin2hex($data) . "\n");
+                $this->Dump->debug("socket_recv buf: " . bin2hex($data) . "\n");
                 $readData[] = $data;
             }
         }
@@ -91,7 +95,7 @@ class Router
     {
         var_dump($this->devices);
         while (true) {
-            echo "\n ===== start receive =====\n";
+            $this->Dump->info("\n ===== start receive =====\n");
 
             $readData = $this->readData();
             if ($readData === null) {
@@ -108,12 +112,12 @@ class Router
                 $srcMac = unpack("H*", substr($pkt, 6, 6))[1];
                 $ethType = unpack("n", substr($pkt, 12, 2))[1]; // network-order (big endian)
 
-                echo "  EtherType: 0x" . dechex($ethType) . "\n";
-                echo "  Src MAC: " . chunk_split($srcMac, 2, ':') . "\n";
-                echo "  Dst MAC: " . chunk_split($dstMac, 2, ':') . "\n";
+                $this->Dump->debug("  EtherType: 0x" . dechex($ethType) . "\n");
+                $this->Dump->debug("  Src MAC: " . chunk_split($srcMac, 2, ':') . "\n");
+                $this->Dump->debug("  Dst MAC: " . chunk_split($dstMac, 2, ':') . "\n");
 
                 if ($ethType !== 0x0800) {
-                    echo "  Not IPv4, skipping...\n";
+                    $this->Dump->debug("  Not IPv4, skipping...\n");
                     continue ;
                 }
 
@@ -127,42 +131,40 @@ class Router
                 $srcIp = long2ip($ip["src"]);
                 $dstIp = long2ip($ip["dst"]);
 
-                echo "  IP: $srcIp → $dstIp, proto: {$ip['proto']}, TTL: {$ip['ttl']}\n";
+                $this->Dump->debug("  IP: $srcIp → $dstIp, proto: {$ip['proto']}, TTL: {$ip['ttl']}\n");
 
                 // --- データ部を抽出
                 $payload = substr($pkt, 14 + $ipHeaderLen);
-                echo "  Payload size: " . strlen($payload) . " bytes\n";
+                $this->Dump->debug("  Payload size: " . strlen($payload) . " bytes\n");
 
-                hexDump($payload) ;
-
-
+                //hexDump($payload) ;
 
                 foreach($this->devices as $device) {
                     // 自分のNIC宛のIPアドレスの場合はスルーする。
                     if (in_array($device['ip'], [$srcIp, $dstIp])) {
-                        echo "same IP of NIC\n";
+                        $this->Dump->debug("Skip: Same IP of NIC\n");
                         continue 2; // whileループのcontinueを行う
                     }
 
                     // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
                     if (hexToMac($srcMac) === $device['mac']) {
-                        echo "packet from my NIC({$device['device']}). nothing to do. \n";
+                        $this->Dump->debug("Skip: packet from my NIC({$device['device']}). nothing to do. \n");
                         continue 2;
                     }
                 }
 
-                var_dump($srcMac);
-                var_dump(str_replace(':', '', $this->nic[0]['mac']));
+                $this->Dump->debug("srcMac: ".$srcMac);
+                $this->Dump->debug(str_replace(':', '', $this->nic[0]['mac']));
 
                 // 宛先IPを見て、自分と同じサブネットのIPアドレスであれば、該当NICからARPを送ってMACアドレスを取得
                 // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
                 foreach($this->devices as $device) {
                     if (Netmask::isSameNetwork($dstIp, $device['ip'], $device['netmask'])) {
 
-                        echo "NIC is {$device['device']}, DestIP: {$dstIp}, NIC IP: {$device['ip']} \n";
+                        $this->Dump->debug("NIC is {$device['device']}, DestIP: {$dstIp}, NIC IP: {$device['ip']} \n");
                         $dstNewMac = $this->getMacAddress($dstIp, $device['ip'], $device['mac'], $device['device']);
                         if ($dstNewMac === '') {
-                            echo "Error dstNewMac is Null, IP: {$dstIp} \n";
+                            $this->Dump->error("Error dstNewMac is Null, IP: {$dstIp} \n");
                             continue 2;
                         }
 
@@ -170,14 +172,14 @@ class Router
                         //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
                         $dstPkt = $pkt;
                         $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($device['mac']), 0, 12);
-                        echo "dstPkt: " . bin2hex($dstPkt) . "\n";
-                        echo "dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n";
-                        echo "dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n";
+                        $this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
+                        $this->Dump->debug("dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n");
+                        $this->Dump->debug("dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n");
 
                         //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
                         $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
                         if ($dstPkt == null) {
-                            echo "dstPkt is null\n";
+                            $this->Dump->debug("dstPkt is null\n");
                             continue;
                         }
                         socket_write($this->sockets[$device['device']], $dstPkt, strlen($dstPkt));
@@ -193,7 +195,7 @@ class Router
     {
         $resultFromCache = $this->arpTable->get($dstIp);
         if ($resultFromCache !== null) {
-            echo "Hit arp table. IP: {$dstIp},\n";
+            $this->Dump->debug("Hit arp table. IP: {$dstIp},\n");
             return $resultFromCache;
         }
         $Arp = new Arp($ip, $mac, $device);
@@ -205,9 +207,9 @@ class Router
 
         $this->arpTable->add($dstIp, $dstNewMac);
 
-        echo "=== ARP reply ===\n";
-        var_dump("Dest MAC(bin2hex: " . bin2hex($dstNewMac));
-        var_dump("Dest MAC(hexToMac): " . hexToMac($dstNewMac));
+        $this->Dump->debug("=== ARP reply ===\n");
+        $this->Dump->debug("Dest MAC(bin2hex: " . bin2hex($dstNewMac));
+        $this->Dump->debug("Dest MAC(hexToMac): " . hexToMac($dstNewMac));
 
         return $dstNewMac;
     }
