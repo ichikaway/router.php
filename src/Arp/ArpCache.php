@@ -9,6 +9,7 @@ class ArpCache
 
     private int $expireCount = 0;
     private int $expireLimit = 2000000;
+    //private int $expireLimit = -1;
 
     public function __construct()
     {

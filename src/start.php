@@ -8,4 +8,5 @@ use Utils\DeviceInfo;
 $nic = (new DeviceInfo())->getDevice();
 
 $router = new Router($nic, new Dump(Dump::ALL));
+//$router = new Router($nic, new Dump(Dump::NONE));
 $router->start();
