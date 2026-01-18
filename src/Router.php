@@ -18,9 +18,17 @@ class Router
 
     private Dump $Dump;
 
-    public function __construct(array $nic, Dump $dump)
+    /**
+     * 複数のプロセスでそれぞれ入力処理を分ける場合、どのNICでreadを待つか指定する
+     * @var string|null
+     */
+    private readonly ?string $handleNic;
+
+    public function __construct(array $nic, Dump $dump, ?string $handleNic = null)
     {
         $this->Dump = $dump;
+
+        $this->handleNic = $handleNic;
 
         $this->nic = $nic;
 
@@ -46,10 +54,15 @@ class Router
 
     private function readData(): ?array {
         $readData = [];
-        $read = array_values($this->sockets);
+        if ($this->handleNic !== null) {
+            $this->Dump->debug("handleNic: " . $this->handleNic . "\n");
+            $read = [$this->sockets[$this->handleNic]];
+        } else {
+            $read = array_values($this->sockets);
+        }
         $write = null;
         $except = null;
-        socket_select($read, $write, $except, 10);
+        socket_select($read, $write, $except, 1);
 
         if (count($read) === 0) {
             $this->Dump->debug("socket select again.\n");
