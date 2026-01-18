@@ -69,10 +69,13 @@ class Router
             return null;
         }
         foreach ($read as $socket) {
-            $nicName = array_search($socket, $this->sockets, true);
-            $this->Dump->debug("read from {$nicName} \n");
+            //$nicName = array_search($socket, $this->sockets, true);
+            //$this->Dump->debug("read from {$nicName} \n");
             //イーサフレームは1514バイトだが、ジャンボフレームなども考慮して65535にした
             $data = @socket_read($socket, 65535);
+            //$data = '';
+            //$ret = @socket_recv($socket, $data, 65535, 0); // 1 recv = 1 frame
+
             if ($data === false || $data === '') {
                 $this->Dump->error("read timeout or error \n");
             } else {
