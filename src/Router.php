@@ -241,7 +241,19 @@ class Router
                             $this->Dump->debug("dstPkt is null\n");
                             continue;
                         }
-                        socket_write($this->sockets[$device['device']], $dstPkt, strlen($dstPkt));
+                        $sendByte = socket_write($this->sockets[$device['device']], $dstPkt, strlen($dstPkt));
+                        /*
+                        //データ送信でエラーがでてるか確認したが、iperfでもエラーがでてなかったのでコメントアウト
+                        if ($sendByte === false) {
+                            var_dump("Error writing to socket\n");
+                        }
+                        if ($sendByte !== strlen($dstPkt)) {
+                            var_dump("Error writing to socket. sendByte: {$sendByte}\n");
+                        }
+                        if ($sendByte > 1000) {
+                            var_dump("sendByte: {$sendByte}\n");
+                        }
+                        */
                         break;
                     }
                 }
