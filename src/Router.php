@@ -97,7 +97,8 @@ class Router
 
             while (true) {
                 $buf = '';
-                $ret = @socket_recv($socket, $buf, 2048, 0); // 1 recv = 1 frame
+                //イーサフレームは1514バイトだが、ジャンボフレームなども考慮して65535に
+                $ret = @socket_recv($socket, $buf, 65535, 0); // 1 recv = 1 frame
 
                 //$this->Dump->debug("socket_recv buf: " . bin2hex($buf) . "\n");
                 if ($ret === false) {
