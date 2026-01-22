@@ -24,8 +24,12 @@ class Router
      */
     private readonly ?string $handleNic;
 
-    public function __construct(array $nic, Dump $dump, ?string $handleNic = null)
+    private ?int $lot;
+
+    public function __construct(array $nic, Dump $dump, ?string $handleNic = null, $lot = null)
     {
+        $this->lot = $lot;
+
         $this->Dump = $dump;
 
         $this->handleNic = $handleNic;
@@ -96,7 +100,17 @@ class Router
         foreach ($read as $socket) {
             $n = 0;
 
+            $lot = 1;
             while (true) {
+                if ($this->lot !== null) {
+                    $lot++;
+                    if ($lot % 2 === $this->lot) {
+                        //var_dump("lot continue {$lot}, {$this->lot}\n");
+                        continue;
+                    } else {
+                        //var_dump("lot not continue {$lot}, {$this->lot}\n");
+                    }
+                }
                 $buf = '';
                 //イーサフレームは1514バイトだが、ジャンボフレームなども考慮して65535に
                 $ret = @socket_recv($socket, $buf, 65535, 0); // 1 recv = 1 frame
