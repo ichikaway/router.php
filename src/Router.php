@@ -43,6 +43,7 @@ class Router
                 die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
             }
             //socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 5, 'usec' => 0]);
+            //socket_set_option($socket, 263 /*SOL_PACKET*/, 23 /*PACKET_IGNORE_OUTGOING*/, 1);
             socket_set_nonblock($socket);
             //socket_set_option($socket, SOL_SOCKET, SO_SNDBUF, 10*1024*1024);
             socket_bind($socket, $nicInfo['device']);
@@ -121,7 +122,7 @@ class Router
 
                 $readData[] = $buf;
                 // 飢餓防止（他ソケットのチャンスを残す）
-                if (++$n >= 200) { // 上限は調整
+                if (++$n >= 128) { // 上限は調整
                     break;
                 }
             }
