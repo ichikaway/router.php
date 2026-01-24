@@ -18,6 +18,8 @@ class Router
 
     private Dump $Dump;
 
+    private array $defaultRouteTable = [];
+
     /**
      * 複数のプロセスでそれぞれ入力処理を分ける場合、どのNICでreadを待つか指定する
      * @var string|null
@@ -56,6 +58,18 @@ class Router
         }
         $this->sockets = $sockets;
         $this->devices = $devices;
+    }
+
+    public function setDefaultRoute(string $gwIp, string $netmask, string $deviceName): void
+    {
+        $this->defaultRouteTable['gw'] = $gwIp;
+        $this->defaultRouteTable['netmask'] = $netmask;
+        $this->defaultRouteTable['device'] = $deviceName;
+    }
+
+    public function getDefaultRoute(): array
+    {
+        return $this->defaultRouteTable;
     }
 
     private function readData(): ?array {
@@ -268,6 +282,27 @@ class Router
                         */
                         break;
                     }
+                }
+                $default = $this->defaultRouteTable;
+                if (isset($default['gw'])) {
+                    $device = $this->devices[$default['device']];
+                    $dstIp = $default['gw'];
+                    $this->Dump->debug("Default GW:  {$default['device']}, gwIP: {$dstIp} \n");
+
+                    $dstNewMac = $this->getMacAddress($dstIp, $device['ip'], $device['mac'], $device['device']);
+                    $dstPkt = $pkt;
+                    $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($device['mac']), 0, 12);
+                    $this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
+                    $this->Dump->debug("dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n");
+                    $this->Dump->debug("dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n");
+
+                    //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
+                    $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
+                    if ($dstPkt == null) {
+                        $this->Dump->debug("dstPkt is null\n");
+                        continue;
+                    }
+                    $sendByte = socket_write($this->sockets[$device['device']], $dstPkt, strlen($dstPkt));
                 }
             }
 
