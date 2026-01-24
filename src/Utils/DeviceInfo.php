@@ -19,6 +19,10 @@ class DeviceInfo
             if (preg_match('/eth[0-9]/', $name) || in_array($name, $specificNicName, true)) {
                 foreach ($if["unicast"] as $info) {
                     if (isset($info["address"]) && isset($info["netmask"])) {
+                        if (!filter_var($info["address"], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                            // IPv4以外のIPアドレスは受け付けない
+                            continue;
+                        }
                         $nic[] = ['device'  => $name,
                                   'mac'     => self::macFromIf($name),
                                   'ip'      => $info["address"],
@@ -30,7 +34,7 @@ class DeviceInfo
         }
 
         if (count($nic) < 2 || is_null($nic[0]['mac'])) {
-            throw new Exception("Device not registered");
+            throw new \Exception("Device not registered");
         }
         return $nic;
     }
