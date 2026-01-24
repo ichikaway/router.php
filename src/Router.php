@@ -219,6 +219,14 @@ class Router
                 $this->Dump->debug("srcMac: ".$srcMac);
                 $this->Dump->debug(str_replace(':', '', $this->nic[0]['mac']));
 
+                //todo
+                // Routing Table
+                // DestNetworkIP(local IP net or default)
+                // gateway(local is 0.0.0.0, default is next hop IP)
+                // netmask, interfaceを管理
+                //
+
+
                 // 宛先IPを見て、自分と同じサブネットのIPアドレスであれば、該当NICからARPを送ってMACアドレスを取得
                 // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
                 foreach($this->devices as $device) {
