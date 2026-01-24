@@ -8,11 +8,15 @@ namespace Utils;
  */
 class DeviceInfo
 {
-    public function getDevice()
+    /**
+     * @param array $specificNicName eth以外のNICを指定する場合に配列で渡す。ethは渡さなくても自動検出される
+     * @return mixed
+     */
+    public function getDevice($specificNicName = [])
     {
         $ifs = net_get_interfaces();
         foreach ($ifs as $name => $if) {
-            if (preg_match('/eth[0-9]/', $name)) {
+            if (preg_match('/eth[0-9]/', $name) || in_array($name, $specificNicName, true)) {
                 foreach ($if["unicast"] as $info) {
                     if (isset($info["address"]) && isset($info["netmask"])) {
                         $nic[] = ['device'  => $name,
