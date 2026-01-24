@@ -1,3 +1,5 @@
+wget https://getcomposer.org/download/latest-stable/composer.phar
+
 
 docker compose exec router bash
   10.0.0.250
