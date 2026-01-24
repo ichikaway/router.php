@@ -8,3 +8,4 @@ tools
 a.out
 tmp
 composer.phar
+start_raspi.php
