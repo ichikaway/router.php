@@ -283,7 +283,7 @@ class Router
                         break;
                     }
                 }
-                $default = $this->defaultRouteTable;
+                $default = $this->getDefaultRoute();
                 if (isset($default['gw'])) {
                     $device = $this->devices[$default['device']];
                     $dstIp = $default['gw'];
