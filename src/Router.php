@@ -3,17 +3,22 @@
 require_once __DIR__ . '/../vendor/autoload.php';
 
 use Dump\Dump;
+use Network\Device;
 use Network\Netmask;
 use Arp\Arp;
 use Arp\ArpCache;
 
 class Router
 {
+    /** @var array<Device> $nic  */
     private array $nic = [];
 
     private ArpCache $arpTable;
 
+    /** @var array<string, Device> $devices */
     private readonly array $devices;
+
+    /** @var array<string, Socket> $sockets */
     private readonly array $sockets;
 
     private Dump $Dump;
@@ -39,7 +44,8 @@ class Router
 
         $this->arpTable = new ArpCache();
 
-        foreach ($nic as $k => $nicInfo) {
+        /** @var Device $Device */
+        foreach ($nic as $Device) {
             $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
             if ($socket === false) {
                 die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
@@ -51,10 +57,10 @@ class Router
 
             socket_set_nonblock($socket);
             //socket_set_option($socket, SOL_SOCKET, SO_SNDBUF, 10*1024*1024);
-            socket_bind($socket, $nicInfo['device']);
+            socket_bind($socket, $Device->getDeviceName());
 
-            $sockets[$nicInfo['device']] = $socket;
-            $devices[$nicInfo['device']] = $nicInfo;
+            $sockets[$Device->getDeviceName()] = $socket;
+            $devices[$Device->getDeviceName()] = $Device;
         }
         $this->sockets = $sockets;
         $this->devices = $devices;
@@ -216,22 +222,21 @@ class Router
 
                 //hexDump($payload) ;
 
-                foreach($this->devices as $device) {
+                foreach($this->devices as $Device) {
                     // 自分のNIC宛のIPアドレスの場合はスルーする。
-                    if (in_array($device['ip'], [$srcIp, $dstIp])) {
+                    if (in_array($Device->getIpAddress(), [$srcIp, $dstIp])) {
                         $this->Dump->debug("Skip: Same IP of NIC\n");
                         continue 2; // whileループのcontinueを行う
                     }
 
                     // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
-                    if (hexToMac($srcMac) === $device['mac']) {
-                        $this->Dump->debug("Skip: packet from my NIC({$device['device']}). nothing to do. \n");
+                    if (hexToMac($srcMac) === $Device->getMacAddress()) {
+                        $this->Dump->debug("Skip: packet from my NIC({$Device->getDeviceName()}). nothing to do. \n");
                         continue 2;
                     }
                 }
 
                 $this->Dump->debug("srcMac: ".$srcMac);
-                $this->Dump->debug(str_replace(':', '', $this->nic[0]['mac']));
 
                 //todo
                 // Routing Table
@@ -243,11 +248,11 @@ class Router
 
                 // 宛先IPを見て、自分と同じサブネットのIPアドレスであれば、該当NICからARPを送ってMACアドレスを取得
                 // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
-                foreach($this->devices as $device) {
-                    if (Netmask::isSameNetwork($dstIp, $device['ip'], $device['netmask'])) {
+                foreach($this->devices as $Device) {
+                    if (Netmask::isSameNetwork($dstIp, $Device->getIpAddress(), $Device->getNetmask())) {
 
-                        $this->Dump->debug("NIC is {$device['device']}, DestIP: {$dstIp}, NIC IP: {$device['ip']} \n");
-                        $dstNewMac = $this->getMacAddress($dstIp, $device['ip'], $device['mac'], $device['device']);
+                        $this->Dump->debug("NIC is {$Device->getDeviceName()}, DestIP: {$dstIp}, NIC IP: {$Device->getIpAddress()} \n");
+                        $dstNewMac = $this->getMacAddress($dstIp, $Device->getIpAddress(), $Device->getMacAddress(), $Device->getDeviceName());
                         if ($dstNewMac === '') {
                             $this->Dump->error("Error dstNewMac is Null, IP: {$dstIp} \n");
                             continue 2;
@@ -256,7 +261,7 @@ class Router
                         //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
                         //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
                         $dstPkt = $pkt;
-                        $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($device['mac']), 0, 12);
+                        $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($Device->getMacAddress()), 0, 12);
                         $this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
                         $this->Dump->debug("dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n");
                         $this->Dump->debug("dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n");
@@ -267,7 +272,7 @@ class Router
                             $this->Dump->debug("dstPkt is null\n");
                             continue;
                         }
-                        $sendByte = socket_write($this->sockets[$device['device']], $dstPkt, strlen($dstPkt));
+                        $sendByte = socket_write($this->sockets[$Device->getDeviceName()], $dstPkt, strlen($dstPkt));
                         /*
                         //データ送信でエラーがでてるか確認したが、iperfでもエラーがでてなかったのでコメントアウト
                         if ($sendByte === false) {
@@ -285,13 +290,13 @@ class Router
                 }
                 $default = $this->getDefaultRoute();
                 if (isset($default['gw'])) {
-                    $device = $this->devices[$default['device']];
+                    $Device = $this->devices[$default['device']];
                     $dstIp = $default['gw'];
                     $this->Dump->debug("Default GW:  {$default['device']}, gwIP: {$dstIp} \n");
 
-                    $dstNewMac = $this->getMacAddress($dstIp, $device['ip'], $device['mac'], $device['device']);
+                    $dstNewMac = $this->getMacAddress($dstIp, $Device->getIpAddress(), $Device->getMacAddress(), $Device->getDeviceName());
                     $dstPkt = $pkt;
-                    $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($device['mac']), 0, 12);
+                    $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($Device->getMacAddress()), 0, 12);
                     $this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
                     $this->Dump->debug("dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n");
                     $this->Dump->debug("dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n");
@@ -302,7 +307,7 @@ class Router
                         $this->Dump->debug("dstPkt is null\n");
                         continue;
                     }
-                    $sendByte = socket_write($this->sockets[$device['device']], $dstPkt, strlen($dstPkt));
+                    $sendByte = socket_write($this->sockets[$Device->getDeviceName()], $dstPkt, strlen($dstPkt));
                 }
             }
 
