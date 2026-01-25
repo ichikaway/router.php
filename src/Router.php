@@ -244,74 +244,70 @@ class Router
                 // gateway(local is 0.0.0.0, default is next hop IP)
                 // netmask, interfaceを管理
                 //
-
-
                 // 宛先IPを見て、自分と同じサブネットのIPアドレスであれば、該当NICからARPを送ってMACアドレスを取得
                 // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
-                foreach($this->devices as $Device) {
-                    if (Netmask::isSameNetwork($dstIp, $Device->getIpAddress(), $Device->getNetmask())) {
-
-                        $this->Dump->debug("NIC is {$Device->getDeviceName()}, DestIP: {$dstIp}, NIC IP: {$Device->getIpAddress()} \n");
-                        $dstNewMac = $this->getMacAddress($dstIp, $Device->getIpAddress(), $Device->getMacAddress(), $Device->getDeviceName());
-                        if ($dstNewMac === '') {
-                            $this->Dump->error("Error dstNewMac is Null, IP: {$dstIp} \n");
-                            continue 2;
-                        }
-
-                        //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
-                        //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
-                        $dstPkt = $pkt;
-                        $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($Device->getMacAddress()), 0, 12);
-                        $this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
-                        $this->Dump->debug("dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n");
-                        $this->Dump->debug("dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n");
-
-                        //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
-                        $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
-                        if ($dstPkt == null) {
-                            $this->Dump->debug("dstPkt is null\n");
-                            continue;
-                        }
-                        $sendByte = socket_write($this->sockets[$Device->getDeviceName()], $dstPkt, strlen($dstPkt));
-                        /*
-                        //データ送信でエラーがでてるか確認したが、iperfでもエラーがでてなかったのでコメントアウト
-                        if ($sendByte === false) {
-                            var_dump("Error writing to socket\n");
-                        }
-                        if ($sendByte !== strlen($dstPkt)) {
-                            var_dump("Error writing to socket. sendByte: {$sendByte}\n");
-                        }
-                        if ($sendByte > 1000) {
-                            var_dump("sendByte: {$sendByte}\n");
-                        }
-                        */
-                        break;
-                    }
+                try {
+                    list($dstIp, $Device) = $this->getNextHopByTargetIp($dstIp);
+                } catch (Exception $e) {
+                    $this->Dump->error("No device found for routing." . $e->getMessage());
+                    continue;
                 }
-                $default = $this->getDefaultRoute();
-                if (isset($default['gw'])) {
-                    $Device = $this->devices[$default['device']];
-                    $dstIp = $default['gw'];
-                    $this->Dump->debug("Default GW:  {$default['device']}, gwIP: {$dstIp} \n");
 
-                    $dstNewMac = $this->getMacAddress($dstIp, $Device->getIpAddress(), $Device->getMacAddress(), $Device->getDeviceName());
-                    $dstPkt = $pkt;
-                    $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($Device->getMacAddress()), 0, 12);
-                    $this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
-                    $this->Dump->debug("dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n");
-                    $this->Dump->debug("dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n");
-
-                    //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
-                    $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
-                    if ($dstPkt == null) {
-                        $this->Dump->debug("dstPkt is null\n");
-                        continue;
-                    }
-                    $sendByte = socket_write($this->sockets[$Device->getDeviceName()], $dstPkt, strlen($dstPkt));
+                $this->Dump->debug("NIC is {$Device->getDeviceName()}, DestIP: {$dstIp}, NIC IP: {$Device->getIpAddress()} \n");
+                $dstNewMac = $this->getMacAddress($dstIp, $Device->getIpAddress(), $Device->getMacAddress(), $Device->getDeviceName());
+                if ($dstNewMac === '') {
+                    $this->Dump->error("Error dstNewMac is Null, IP: {$dstIp} \n");
+                    continue;
                 }
+
+                //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
+                //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
+                $dstPkt = $pkt;
+                $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($Device->getMacAddress()), 0, 12);
+                $this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
+                $this->Dump->debug("dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n");
+                $this->Dump->debug("dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n");
+
+                //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
+                $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
+                if ($dstPkt == null) {
+                    $this->Dump->debug("dstPkt is null\n");
+                    continue;
+                }
+                $sendByte = socket_write($this->sockets[$Device->getDeviceName()], $dstPkt, strlen($dstPkt));
+                /*
+                //データ送信でエラーがでてるか確認したが、iperfでもエラーがでてなかったのでコメントアウト
+                if ($sendByte === false) {
+                    var_dump("Error writing to socket\n");
+                }
+                if ($sendByte !== strlen($dstPkt)) {
+                    var_dump("Error writing to socket. sendByte: {$sendByte}\n");
+                }
+                if ($sendByte > 1000) {
+                    var_dump("sendByte: {$sendByte}\n");
+                }
+                */
+
             }
 
         }
+    }
+
+    private function getNextHopByTargetIp(string $dstIp): array
+    {
+        foreach ($this->devices as $Device) {
+            if (Netmask::isSameNetwork($dstIp, $Device->getIpAddress(), $Device->getNetmask())) {
+                return [$dstIp, $Device];
+            }
+        }
+        $default = $this->getDefaultRoute();
+        if (isset($default['gw'])) {
+            $Device = $this->devices[$default['device']];
+            $dstIp  = $default['gw'];
+            $this->Dump->debug("Default GW:  {$default['device']}, gwIP: {$dstIp} \n");
+            return [$dstIp, $Device];
+        }
+        throw new \Exception("No route device.");
     }
 
     private function getMacAddress(string $dstIp, string $ip, string $mac, string $device): string
