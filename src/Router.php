@@ -248,32 +248,12 @@ class Router
                 // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
                 try {
                     list($dstIp, $Device) = $this->getNextHopByTargetIp($dstIp);
+                    $dstPkt = $this->createDestEtherFrame($pkt, $dstIp, $Device);
                 } catch (Exception $e) {
                     $this->Dump->error("No device found for routing." . $e->getMessage());
                     continue;
                 }
 
-                $this->Dump->debug("NIC is {$Device->getDeviceName()}, DestIP: {$dstIp}, NIC IP: {$Device->getIpAddress()} \n");
-                $dstNewMac = $this->getMacAddress($dstIp, $Device->getIpAddress(), $Device->getMacAddress(), $Device->getDeviceName());
-                if ($dstNewMac === '') {
-                    $this->Dump->error("Error dstNewMac is Null, IP: {$dstIp} \n");
-                    continue;
-                }
-
-                //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
-                //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
-                $dstPkt = $pkt;
-                $dstPkt = substr_replace($dstPkt, macToBinary($dstNewMac) . macToBinary($Device->getMacAddress()), 0, 12);
-                $this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
-                $this->Dump->debug("dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n");
-                $this->Dump->debug("dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n");
-
-                //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
-                $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
-                if ($dstPkt == null) {
-                    $this->Dump->debug("dstPkt is null\n");
-                    continue;
-                }
                 $sendByte = socket_write($this->sockets[$Device->getDeviceName()], $dstPkt, strlen($dstPkt));
                 /*
                 //データ送信でエラーがでてるか確認したが、iperfでもエラーがでてなかったのでコメントアウト
@@ -291,6 +271,41 @@ class Router
             }
 
         }
+    }
+
+    /**
+     * dstIpを見て転送するイーサフレームを作成する
+     * dstIpからMACアドレスをAPRで取得
+     * イーサフレームのsrc/dst MACアドレスを書き換える
+     * IPパケットのTTLを減らしてチェックサム再計算
+     *
+     * @param string $data
+     * @param string $dstIp
+     * @param Device $Device
+     * @return string
+     * @throws Exception
+     */
+    private function createDestEtherFrame(string $data, string $dstIp, Device $Device): string
+    {
+        $this->Dump->debug("NIC is {$Device->getDeviceName()}, DestIP: {$dstIp}, NIC IP: {$Device->getIpAddress()} \n");
+        $dstNewMac = $this->getMacAddress($dstIp, $Device->getIpAddress(), $Device->getMacAddress(), $Device->getDeviceName());
+        if ($dstNewMac === '') {
+            throw new Exception("Error dstNewMac is Null, IP: {$dstIp} \n");
+        }
+
+        //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
+        //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
+        $dstPkt = substr_replace($data, macToBinary($dstNewMac) . macToBinary($Device->getMacAddress()), 0, 12);
+        $this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
+        $this->Dump->debug("dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n");
+        $this->Dump->debug("dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n");
+
+        //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
+        $dstPkt = decrementIPv4TtlAndFixChecksum($dstPkt);
+        if ($dstPkt == null) {
+            throw new Exception("dstPkt is null\n");
+        }
+        return $dstPkt;
     }
 
     private function getNextHopByTargetIp(string $dstIp): array
