@@ -290,6 +290,12 @@ class Router
         $this->Dump->debug("NIC is {$Device->getDeviceName()}, DestIP: {$dstIp}, NIC IP: {$Device->getIpAddress()} \n");
         $dstNewMac = $this->getMacAddress($dstIp, $Device->getIpAddress(), $Device->getMacAddress(), $Device->getDeviceName());
         if ($dstNewMac === '') {
+            $ipHeader = substr($data, 14, 20); // IHL によっては20〜60バイト
+            $ip = unpack("Cversion_ihl/Ctos/nlength/nid/nflags_offset/Cttl/Cproto/nchecksum/Nsrc/Ndst", $ipHeader);
+            $srcIp = long2ip($ip["src"]);
+            $dstIp2 = long2ip($ip["dst"]);
+            $this->Dump->error("  IP: $srcIp → $dstIp2, proto: {$ip['proto']}, TTL: {$ip['ttl']}\n");
+
             throw new Exception("Error dstNewMac is Null, IP: {$dstIp} \n");
         }
 
