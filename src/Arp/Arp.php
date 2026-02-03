@@ -36,7 +36,7 @@ class Arp
         if ($socket === false) {
             die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
         }
-        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 5, 'usec' => 0]);
+        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 2, 'usec' => 0]);
         $this->socket = $socket;
         socket_bind($this->socket, $nic);
     }
