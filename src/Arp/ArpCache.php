@@ -11,8 +11,11 @@ class ArpCache
     private int $expireLimit = 2000000;
     //private int $expireLimit = -1;
 
-    public function __construct()
+    public function __construct(?int $expireLimit = null)
     {
+        if ($expireLimit !== null) {
+            $this->expireLimit = $expireLimit;
+        }
     }
 
     public function add(string $key, string $value): bool

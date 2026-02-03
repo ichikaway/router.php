@@ -16,6 +16,8 @@ class Router
 
     private ArpCache $arpTable;
 
+    private ArpCache $arpNoResolveTable;
+
     /** @var array<string, Device> $devices */
     private readonly array $devices;
 
@@ -44,6 +46,7 @@ class Router
         $sockets = [];
 
         $this->arpTable = new ArpCache();
+        $this->arpNoResolveTable = new ArpCache(10); //ARPで解決できなかったIPのキャッシュテーブル。10回テーブル検索でクリアする
 
         /** @var Device $Device */
         foreach ($nic as $Device) {
@@ -334,18 +337,31 @@ class Router
 
     private function getMacAddress(string $dstIp, string $ip, string $mac, string $device): string
     {
+        // 過去にARPで解決したIPかキャッシュ検索
         $resultFromCache = $this->arpTable->get($dstIp);
         if ($resultFromCache !== null) {
-            $this->Dump->debug("Hit arp table. IP: {$dstIp},\n");
+            $this->Dump->debug("Hit arp cache table. IP: {$dstIp},\n");
             return $resultFromCache;
         }
+
+        // 過去にARPで解決できなかったIPのキャッシュを検索
+        $noResultFromCache = $this->arpNoResolveTable->get($dstIp);
+        if ($noResultFromCache !== null) {
+            $this->Dump->debug("Hit no result arp cache table. IP: {$dstIp},\n");
+            return '';
+        }
+
+        // ARPキャッシュがヒットしなかったのでARPリクエストを送信して探す
         $Arp = new Arp($ip, $mac, $device);
         $dstNewMac = $Arp->sendArpRequest($dstIp);
 
         if ($dstNewMac === '') {
+            // ARP解決できなかったIPをキャッシュ
+            $this->arpNoResolveTable->add($dstIp, '');
             return '';
         }
 
+        // ARP解決したIPをキャッシュ
         $this->arpTable->add($dstIp, $dstNewMac);
 
         $this->Dump->debug("=== ARP reply ===\n");
