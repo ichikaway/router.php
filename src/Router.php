@@ -218,6 +218,12 @@ class Router
                 $srcIp = long2ip($ip["src"]);
                 $dstIp = long2ip($ip["dst"]);
 
+                // ブロードキャストアドレス（第4オクテットが255のIP）は無視する
+                // ブロードキャストアドレスはルーティング対象ではないことと、処理をする場合はARPでMACアドレスの解決ができず処理がそこで詰まるため
+                if (($ip["dst"] & 0x000000FF) === 0x000000FF) {
+                    continue;
+                }
+
                 $this->Dump->debug("  IP: $srcIp → $dstIp, proto: {$ip['proto']}, TTL: {$ip['ttl']}\n");
 
                 // --- データ部を抽出
