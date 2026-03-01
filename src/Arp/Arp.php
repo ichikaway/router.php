@@ -36,7 +36,7 @@ class Arp
         if ($socket === false) {
             die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
         }
-        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 2, 'usec' => 0]);
+        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 1, 'usec' => 0]);
         $this->socket = $socket;
         socket_bind($this->socket, $nic);
     }
@@ -61,7 +61,7 @@ class Arp
                     return $destMac;
                 }
             }
-            if ($cnt > 500) {
+            if ($cnt > 5) {
                 return "";
             }
         }
