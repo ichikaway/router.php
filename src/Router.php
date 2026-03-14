@@ -361,8 +361,10 @@ class Router
         }
 
         // ARPキャッシュがヒットしなかったのでARPリクエストを送信して探す
+        $this->Dump->debugArp("start Arp IP: {$ip}\n");
         $Arp = new Arp($ip, $mac, $device);
         $dstNewMac = $Arp->sendArpRequest($dstIp);
+        $this->Dump->debugArp("end Arp MAC: {$dstNewMac}\n");
 
         if ($dstNewMac === '') {
             // ARP解決できなかったIPをキャッシュ

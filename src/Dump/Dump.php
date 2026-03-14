@@ -7,6 +7,7 @@ class Dump
     public const int NONE = 0;
     public const int INFO = 1;
     public const int DEBUG = 2;
+    public const int DEBUG_ARP = 3;
     public const int ERROR = 4;
     public const int ALL = 7;
 
@@ -41,6 +42,11 @@ class Dump
     public function debug(mixed $message): void
     {
         $this->echo($message, self::DEBUG);
+    }
+
+    public function debugArp(mixed $message): void
+    {
+        $this->echo($message, self::DEBUG_ARP);
     }
 
     public function error(mixed $message): void
