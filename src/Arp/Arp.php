@@ -61,7 +61,7 @@ class Arp
                     return $destMac;
                 }
             }
-            if ($cnt > 5) {
+            if ($cnt > 2) {
                 return "";
             }
         }
