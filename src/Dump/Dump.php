@@ -23,6 +23,8 @@ class Dump
             return;
         }
         if ($this->debugLevel === $level || $this->isAllDump()) {
+            $now = (new \DateTimeImmutable())->format("Y-m-d H:i:s");
+            $message = "[{$now}] $message";
             if (is_string($message)) {
                 echo $message;
             } else {
