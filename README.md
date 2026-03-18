@@ -5,6 +5,8 @@
 * Packet forwarding using multiple NICs and networks
 * Default routing functionality
 * ARP support
+* NICs with names matching `eth[0-9]` are automatically detected.
+
 
 ## Usage
 
@@ -62,7 +64,8 @@ Log in using the following commands, and run `sudo php start.php` in the router 
 ## 機能
 - 複数NICとネットワークを使ったパケット転送
 - デフォルトルート機能
-- ARP
+- ARP/ARPキャッシュ
+- `eth[0-9]` の名前のNICは自動認識
 
 ## 使い方
 ### PHPバージョン
