@@ -55,3 +55,25 @@ Alice offload-checksum off, Bob offload-checksum on -> ok
  ./configure --enable-sockets --enable-cli --enable-pcntl --disable-pdo  --without-sqlite3 --prefix=/php
   make -j3
   make install
+
+## 負荷計測
+apt install strace linux-perf
+
+strace -c -p 
+
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- ----------------
+ 66.07    0.631826           9     66088           write
+ 33.34    0.318802           4     66899       811 recvfrom
+  0.43    0.004116           5       816           pselect6
+  0.08    0.000805          12        64           munmap
+  0.05    0.000500           7        64           mmap
+  0.03    0.000305           4        64        64 prctl
+------ ----------- ----------- --------- --------- ----------------
+100.00    0.956354           7    133995       875 total
+
+
+perf record -g -p <PID>
+perf report
+で見るとwriteの後にsoftirqで割り込みがあり、PHPがAF_PACKETで書き込みしたデータがカーネルのTCPスタックで処理されている模様（カーネルから見ると新しい受信データのように見える？）
+
