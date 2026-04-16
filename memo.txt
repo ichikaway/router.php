@@ -75,5 +75,7 @@ strace -c -p
 
 perf record -g -p <PID>
 perf report
-で見るとwriteの後にsoftirqで割り込みがあり、PHPがAF_PACKETで書き込みしたデータがカーネルのTCPスタックで処理されている模様（カーネルから見ると新しい受信データのように見える？）
+ で見るとwriteの後にsoftirqで割り込みがあり、PHPがAF_PACKETで書き込みしたデータがカーネルのTCPスタックで処理されている模様（カーネルから見ると新しい受信データのように見える？）
 
+perf script report flamegraph
+グラフhtml出力
