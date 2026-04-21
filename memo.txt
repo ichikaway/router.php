@@ -77,5 +77,27 @@ perf record -g -p <PID>
 perf report
  で見るとwriteの後にsoftirqで割り込みがあり、PHPがAF_PACKETで書き込みしたデータがカーネルのTCPスタックで処理されている模様（カーネルから見ると新しい受信データのように見える？）
 
+## xdebugのプロファイル
+pecl installはすでに廃止されていたので xdebug-3.5.1.tar.gz をダウンロード。
+ダウンロードサイト: https://github.com/xdebug/xdebug/releases
+
+phpize
+./configure --enable-xdebug
+make
+make install
+
+/router/src/ext# ls /usr/local/etc/php/conf.d/xdebug.ini を作成
+zend_extension=xdebug の1行を記載
+
+php -d xdebug.mode=profile     -d xdebug.output_dir=/tmp start_eth0.php
+でプロファイリング
+/tmp/cachegrind.out.数字
+のファイルができる
+src/ext/profiler.phpで集計処理
+
+
+
+
+
 perf script report flamegraph
 グラフhtml出力
