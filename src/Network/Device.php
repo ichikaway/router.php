@@ -9,6 +9,9 @@ class Device
     private readonly string $ipAddress;
     private readonly string $netmask;
 
+    private readonly string $ipAddressLong;
+    private readonly string $netMaskLong;
+    private readonly string $binaryMacAddress;
     /**
      * @param string $deviceName
      * @param string $macAddress
@@ -21,6 +24,13 @@ class Device
         $this->macAddress = $macAddress;
         $this->ipAddress = $ipAddress;
         $this->netmask = $netmask;
+        $this->binaryMacAddress = macToBinary($macAddress);
+        $this->ipAddressLong = ip2long($ipAddress);
+        $this->netMaskLong = ip2long($netmask);
+    }
+
+    public function getBinaryMacAddress(): string {
+        return $this->binaryMacAddress;
     }
 
     public function getDeviceName(): string
@@ -43,6 +53,14 @@ class Device
         return $this->netmask;
     }
 
+    public function getIpAddressLong(): string
+    {
+        return $this->ipAddressLong;
+    }
 
+    public function getNetMaskLong(): string
+    {
+        return $this->netMaskLong;
+    }
 
 }
