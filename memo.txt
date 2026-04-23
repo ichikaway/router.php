@@ -100,6 +100,23 @@ php -d xdebug.mode=profile     -d xdebug.output_dir=/tmp start_eth0.php
 src/ext/profiler.phpで集計処理
 
 
+## dockerコンテナのnftやbrdige処理を停止
+
+### 確認方法
+sysctl net.bridge.bridge-nf-call-iptables
+sysctl net.bridge.bridge-nf-call-ip6tables
+sysctl net.bridge.bridge-nf-call-arptables
+これが 1 なら、bridge上のL2フレームが netfilter にも渡されている
+
+nft list ruleset
+これでルールが出てくるならルールを削除する
+
+### 設定方法
+sysctl -w net.bridge.bridge-nf-call-iptables=0
+sysctl -w net.bridge.bridge-nf-call-ip6tables=0
+sysctl -w net.bridge.bridge-nf-call-arptables=0
+
+ nft flush ruleset
 
 
 
