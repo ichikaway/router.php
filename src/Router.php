@@ -151,7 +151,7 @@ class Router
                 $readData[] = $buf;
                 // 飢餓防止（他ソケットのチャンスを残す）
                 // 128や64は多すぎたため32が適正だった
-                if (++$n >= 32) { // 上限は調整
+                if (++$n >= 64) { // 上限は調整
                     //echo "break";
                     break;
                 }
@@ -224,9 +224,10 @@ class Router
                 //$ihl = $ip["version_ihl"] & 0x0F;
                 //$ipHeaderLen = $ihl * 4;
 
-                $srcIp = long2ip($ip["src"]);
+                //$srcIp = long2ip($ip["src"]);
                 $dstIp = long2ip($ip["dst"]);
-
+                $srcIpLong = $ip["src"];
+                $dstIpLong = $ip["dst"];
 
                 //echo("  Src MAC: " . chunk_split($srcMac, 2, ':') . "\n");
                 //echo("  IP: $srcIp → $dstIp\n");
@@ -240,7 +241,8 @@ class Router
 
                 foreach($this->devices as $Device) {
                     // 自分のNIC宛のIPアドレスの場合はスルーする。
-                    if (in_array($Device->getIpAddress(), [$srcIp, $dstIp])) {
+                    if (in_array($Device->getIpAddressLong(), [$srcIpLong, $dstIpLong])) {
+                        //if (in_array($Device->getIpAddress(), [$srcIp, $dstIp])) {
                         //$this->Dump->debug("Skip: Same IP of NIC\n");
                         continue 2; // whileループのcontinueを行う
                     }
