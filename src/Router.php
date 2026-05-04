@@ -8,9 +8,13 @@ use Dump\Dump;
 use Network\Device;
 use Network\IpPacket;
 use Network\Netmask;
+use parallel\Runtime;
+use parallel\Channel;
 
 class Router
 {
+    private int $workerCount = 1;
+
     /** @var array<Device> $nic  */
     private array $nic = [];
 
@@ -183,10 +187,54 @@ class Router
     }
     public function start()
     {
+
+        $nicList = array_keys($this->sockets);
+
+        $chan = [];
+
+        for ($i = 0; $i < $this->workerCount; $i++) {
+            $chanName = 'chann-' . $i;
+            $runtime[$i] = new Runtime();
+            $chan[$i] = Channel::make($chanName, Channel::Infinite);
+
+            $runtime[$i]->run(static function ($chanName) use ($nicList) : void {
+                $channel = Channel::open($chanName);
+
+                $sockets = [];
+
+                foreach ($nicList as $Device) {
+                    $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
+                    if ($socket === false) {
+                        die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
+                    }
+
+                    // このsocketから送信したデータはreadされないようにする
+                    socket_set_option($socket, 263 /*SOL_PACKET*/, 23 /*PACKET_IGNORE_OUTGOING*/, 1);
+
+                    socket_set_nonblock($socket);
+                    //socket_set_option($socket, SOL_SOCKET, SO_SNDBUF, 10*1024*1024);
+                    socket_bind($socket, $Device);
+                    $sockets[$Device] = $socket;
+                }
+
+                while (true) {
+                    list($frame,$deviceName) = $channel->recv();
+
+                    if ($frame === null) {
+                        break;
+                    }
+                    //echo "socket write in thread {$i}. {$deviceName}\n";
+                    @socket_write($sockets[$deviceName], $frame, strlen($frame));
+                }
+            }, [$chanName]);
+        }
+
+
         var_dump($this->devices);
         while (true) {
             //$this->Dump->info("\n ===== start receive =====\n");
 
+            $cnt = 0;
             $readData = $this->readData();
             if ($readData === null) {
                 continue;
@@ -283,7 +331,13 @@ class Router
                     continue;
                 }
 
-                socket_write($this->sockets[$Device->getDeviceName()], $dstPkt, strlen($dstPkt));
+                //socket_write($this->sockets[$Device->getDeviceName()], $dstPkt, strlen($dstPkt));
+                $writeDeviceName = $Device->getDeviceName();
+                $chan[$cnt]->send([$dstPkt, $writeDeviceName]);
+                $cnt++;
+                if ($cnt >= $this->workerCount) {
+                    $cnt = 0;
+                }
                 /*
                 //データ送信でエラーがでてるか確認したが、iperfでもエラーがでてなかったのでコメントアウト
                 if ($sendByte === false) {
