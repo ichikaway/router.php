@@ -9,6 +9,7 @@
       "tcp",
       "php"
     ],
+    "optimize-autoloader": true,
     "require": {
         "php": ">=8.5",
         "ext-sockets": "*"
