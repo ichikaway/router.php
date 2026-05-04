@@ -1,4 +1,4 @@
-FROM php:8.5.1
+FROM php:8.5.5-zts
 
 RUN apt update
 RUN apt install -y \
@@ -13,6 +13,19 @@ RUN apt install -y \
     tcpdump \
     curl \
     ethtool \
-    wget
+    strace \
+    linux-perf \
+    && docker-php-ext-install sockets \
+    && pecl install parallel \
+    && docker-php-ext-enable parallel
+#    wget \
+#    libffi-dev \
+#    libzip-dev \
+#    libcap2-bin \
+#    && docker-php-ext-install sockets \
+#    && docker-php-ext-install ffi \
+#    && docker-php-ext-install pcntl \
+#    && docker-php-ext-install zip \
+#    && setcap cap_sys_ptrace=eip /usr/local/bin/php
 
-RUN docker-php-ext-install sockets
+#RUN docker-php-ext-install sockets
