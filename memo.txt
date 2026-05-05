@@ -119,4 +119,10 @@ sysctl -w net.bridge.bridge-nf-call-arptables=0
  nft flush ruleset
 
 
+## ブランチの説明
+- performance-up ブランチは、スレッドを使わずにいろいろな処理をバイナリのまま計算するなどして2.47Gbpsまで到達
+- performance-up-thread ブランチは、スレッドを使いsocket_writeのみ1チャネル1スレッドで処理, 3Gbpsまで到達
+- performance-up-all-in-thread ブランチは、socker_readの後の処理を全てスレッドで行うようにした、2.6Gbps程度。スレッド数を増やしてもスループットは上がらず
+
+
 
