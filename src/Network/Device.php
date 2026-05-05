@@ -63,4 +63,16 @@ class Device
         return $this->netMaskLong;
     }
 
+    public function toArray(): array
+    {
+        return [
+            'deviceName' => $this->deviceName,
+            'macAddress' => $this->macAddress,
+            'ipAddress' => $this->ipAddress,
+            'netmask' => $this->netmask,
+            'ipAddressLong' => $this->ipAddressLong,
+            'netMaskLong' => $this->netMaskLong,
+            'binaryMacAddress' => $this->binaryMacAddress,
+        ];
+    }
 }

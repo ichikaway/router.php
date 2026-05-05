@@ -156,7 +156,7 @@ class Router
                 // 飢餓防止（他ソケットのチャンスを残す）
                 // 128や64は多すぎたため32が適正だった <- これはスレッド対応前の話でsocket writeの処理が重かったので32ぐらいが適正だった
                 // スレッド対応したら処理回数が増やせたので、Drain readの上限を200にするとさらにスループット出た
-                if (++$n >= 200) { // 上限は調整
+                if (++$n >= 32) { // 上限は調整
                     //echo "break";
                     break;
                 }
@@ -186,24 +186,36 @@ class Router
 
         return $readData;
     }
+
     public function start()
     {
 
         $nicList = array_keys($this->sockets);
 
         $chan = [];
+        $deviceList = [];
+
+        foreach ($this->devices as $device) {
+            $deviceList[$device->getDeviceName()] = $device->toArray();
+        }
 
         for ($i = 0; $i < $this->workerCount; $i++) {
             $chanName = 'chann-' . $i;
             $runtime[$i] = new Runtime();
             $chan[$i] = Channel::make($chanName, Channel::Infinite);
 
-            $runtime[$i]->run(static function ($chanName) use ($nicList) : void {
+            $runtime[$i]->run(static function ($chanName, $deviceList, $defaultRoute) use ($nicList) : void {
                 $channel = Channel::open($chanName);
 
                 $sockets = [];
 
-                foreach ($nicList as $Device) {
+                //var_dump($Devices);
+                require_once __DIR__ . '/../vendor/autoload.php';
+
+                $arpTable = new ArpCache();
+                //$arpNoResolveTable = new ArpCache(10);
+
+                foreach ($nicList as $nicName) {
                     $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
                     if ($socket === false) {
                         die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
@@ -214,24 +226,94 @@ class Router
 
                     socket_set_nonblock($socket);
                     //socket_set_option($socket, SOL_SOCKET, SO_SNDBUF, 10*1024*1024);
-                    socket_bind($socket, $Device);
-                    $sockets[$Device] = $socket;
+                    socket_bind($socket, $nicName);
+                    $sockets[$nicName] = $socket;
                 }
 
                 while (true) {
-                    list($frame,$deviceName) = $channel->recv();
-
-                    if ($frame === null) {
+                    $pkt = $channel->recv();
+                    if ($pkt === null) {
                         break;
                     }
+
+                    $srcMac = unpack("H*", substr($pkt, 6, 6))[1];
+                    $ethType = unpack("n", substr($pkt, 12, 2))[1]; // network-order (big endian)
+
+                    if ($ethType !== 0x0800) {
+                        //$this->Dump->debug("  Not IPv4, skipping...\n");
+                        //echo "no ipv4";
+                        continue ;
+                    }
+
+                    $ip = unpack("Nsrc/Ndst", substr($pkt, 14+12, 8));
+
+                    $dstIp = long2ip($ip["dst"]);
+                    $srcIpLong = $ip["src"];
+                    $dstIpLong = $ip["dst"];
+
+                    foreach($deviceList as $deviceInfo) {
+                        // 自分のNIC宛のIPアドレスの場合はスルーする。
+                        if (in_array($deviceInfo['ipAddressLong'], [$srcIpLong, $dstIpLong])) {
+                            //if (in_array($Device->getIpAddress(), [$srcIp, $dstIp])) {
+                            //$this->Dump->debug("Skip: Same IP of NIC\n");
+                            continue 2; // whileループのcontinueを行う
+                        }
+
+                        // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
+                        if ($srcMac === $deviceInfo['binaryMacAddress']) {
+                            //if ($srcMacHex === $Device->getMacAddress()) {
+                            //$this->Dump->debug("Skip: packet from my NIC({$Device->getDeviceName()}). nothing to do. \n");
+                            echo "same data nic";
+                            continue 2;
+                        }
+
+                        //todo
+                        // 同じネットワークのブロードキャストアドレスだった場合はスルーする
+                        // ブロードキャストアドレスはルーティング対象ではないことと、処理をする場合はARPでMACアドレスの解決ができず処理がそこで詰まるため
+                        // 255.255.255.255は無視する、同じネットワークのブロードキャストアドレスか判定する
+                        if (($ip["dst"] & 0x000000FF) === 0x000000FF) {
+                            continue 2;
+                        }
+
+                    }
+
+                    //todo
+                    // Routing Table
+                    // DestNetworkIP(local IP net or default)
+                    // gateway(local is 0.0.0.0, default is next hop IP)
+                    // netmask, interfaceを管理
+                    //
+                    // 宛先IPを見て、自分と同じサブネットのIPアドレスであれば、該当NICからARPを送ってMACアドレスを取得
+                    // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
+                    try {
+                        list($dstIp, $routeToDevice) = Network\Routing::getNextHopByTargetIp($dstIp, $deviceList, $defaultRoute);
+
+                        // 過去にARPで解決したIPかキャッシュ検索
+                        $resultFromCache = $arpTable->get($dstIp);
+                        if ($resultFromCache == null) {
+                            //$this->Dump->debug("Hit arp cache table. IP: {$dstIp},\n");
+                            $dstNewMac = Network\Routing::getMacAddress($dstIp, $routeToDevice['ipAddress'], $routeToDevice['macAddress'], $routeToDevice['deviceName']);
+                            $arpTable->add($dstIp, $dstNewMac);
+                        } else {
+                            $dstNewMac = $resultFromCache;
+                        }
+
+                        $dstPkt = Network\Routing::createDestEtherFrame($pkt, $dstIp, $routeToDevice, $dstNewMac);
+                    } catch (Exception $e) {
+                        //$this->Dump->error("No device found for routing." . $e->getMessage());
+                        continue;
+                    }
+
                     //echo "socket write in thread {$i}. {$deviceName}\n";
-                    @socket_write($sockets[$deviceName], $frame, strlen($frame));
+
+                    socket_write($sockets[$routeToDevice['deviceName']], $dstPkt, strlen($dstPkt));
+                    //@socket_write($sockets[$deviceName], $dstPkt, strlen($dstPkt));
                 }
-            }, [$chanName]);
+            }, [$chanName, $deviceList, $this->getDefaultRoute()]);
         }
 
 
-        var_dump($this->devices);
+        //var_dump($this->devices);
         while (true) {
             //$this->Dump->info("\n ===== start receive =====\n");
 
@@ -245,6 +327,13 @@ class Router
                 //$ip_header_length = (ord($data[0]) & 0x0F) * 4;  // IPヘッダーの長さを取得
                 //$tcp_header_start = $ip_header_length;  // TCPヘッダーの開始位置
 
+                $chan[$cnt]->send($data);
+                $cnt++;
+                if ($cnt >= $this->workerCount) {
+                    $cnt = 0;
+                }
+
+                /*
                 // --- Ethernet header (14 bytes)
                 $pkt = $data;
                 //$dstMac = unpack("H*", substr($pkt, 0, 6))[1];
@@ -339,6 +428,8 @@ class Router
                 if ($cnt >= $this->workerCount) {
                     $cnt = 0;
                 }
+                */
+
                 /*
                 //データ送信でエラーがでてるか確認したが、iperfでもエラーがでてなかったのでコメントアウト
                 if ($sendByte === false) {
