@@ -199,6 +199,41 @@ class Router
             $deviceList[$device->getDeviceName()] = $device->toArray();
         }
 
+        $writeChan = Channel::make('write', Channel::Infinite);
+        $writeRuntime = new Runtime();
+
+        // Socket Writeだけのチャンネル
+        $writeRuntime->run(function () use ($nicList) {
+            $channel = Channel::open('write');
+
+            $sockets = [];
+
+            foreach ($nicList as $Device) {
+                $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
+                if ($socket === false) {
+                    die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
+                }
+
+                // このsocketから送信したデータはreadされないようにする
+                socket_set_option($socket, 263 /*SOL_PACKET*/, 23 /*PACKET_IGNORE_OUTGOING*/, 1);
+
+                //socket_set_nonblock($socket);
+                //socket_set_option($socket, SOL_SOCKET, SO_SNDBUF, 10*1024*1024);
+                socket_bind($socket, $Device);
+                $sockets[$Device] = $socket;
+            }
+
+            while (true) {
+                list($frame,$deviceName) = $channel->recv();
+
+                if ($frame === null) {
+                    break;
+                }
+                //echo "socket write in thread {$i}. {$deviceName}\n";
+                @socket_write($sockets[$deviceName], $frame, strlen($frame));
+            }
+        });
+
         for ($i = 0; $i < $this->workerCount; $i++) {
             $chanName = 'chann-' . $i;
             $runtime[$i] = new Runtime();
@@ -206,6 +241,8 @@ class Router
 
             $runtime[$i]->run(static function ($chanName, $deviceList, $defaultRoute) use ($nicList) : void {
                 $channel = Channel::open($chanName);
+
+                $writeChannel = Channel::open('write');
 
                 $sockets = [];
 
@@ -215,20 +252,20 @@ class Router
                 $arpTable = new ArpCache();
                 //$arpNoResolveTable = new ArpCache(10);
 
-                foreach ($nicList as $nicName) {
-                    $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
-                    if ($socket === false) {
-                        die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
-                    }
-
-                    // このsocketから送信したデータはreadされないようにする
-                    socket_set_option($socket, 263 /*SOL_PACKET*/, 23 /*PACKET_IGNORE_OUTGOING*/, 1);
-
-                    socket_set_nonblock($socket);
-                    //socket_set_option($socket, SOL_SOCKET, SO_SNDBUF, 10*1024*1024);
-                    socket_bind($socket, $nicName);
-                    $sockets[$nicName] = $socket;
-                }
+//                foreach ($nicList as $nicName) {
+//                    $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
+//                    if ($socket === false) {
+//                        die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
+//                    }
+//
+//                    // このsocketから送信したデータはreadされないようにする
+//                    socket_set_option($socket, 263 /*SOL_PACKET*/, 23 /*PACKET_IGNORE_OUTGOING*/, 1);
+//
+//                    socket_set_nonblock($socket);
+//                    //socket_set_option($socket, SOL_SOCKET, SO_SNDBUF, 10*1024*1024);
+//                    socket_bind($socket, $nicName);
+//                    $sockets[$nicName] = $socket;
+//                }
 
                 while (true) {
                     $pkt = $channel->recv();
@@ -306,7 +343,9 @@ class Router
 
                     //echo "socket write in thread {$i}. {$deviceName}\n";
 
-                    socket_write($sockets[$routeToDevice['deviceName']], $dstPkt, strlen($dstPkt));
+                    $writeDeviceName = $routeToDevice['deviceName'];
+                    $writeChannel->send([$dstPkt, $writeDeviceName]);
+                    //socket_write($sockets[$routeToDevice['deviceName']], $dstPkt, strlen($dstPkt));
                     //@socket_write($sockets[$deviceName], $dstPkt, strlen($dstPkt));
                 }
             }, [$chanName, $deviceList, $this->getDefaultRoute()]);
