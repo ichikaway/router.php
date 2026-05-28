@@ -8,6 +8,7 @@ use Dump\Dump;
 use Network\Device;
 use Network\IpPacket;
 use Network\Netmask;
+use Sound\SendSoundMessage;
 
 class Router
 {
@@ -25,6 +26,8 @@ class Router
     private readonly array $sockets;
 
     private Dump $Dump;
+
+    private SendSoundMessage $Sound;
 
     private array $defaultRouteTable = [];
 
@@ -47,6 +50,8 @@ class Router
 
         $this->arpTable = new ArpCache();
         $this->arpNoResolveTable = new ArpCache(10); //ARPで解決できなかったIPのキャッシュテーブル。10回テーブル検索でクリアする
+
+        $this->Sound = new SendSoundMessage('127.0.0.1', 57120);
 
         /** @var Device $Device */
         foreach ($nic as $Device) {
@@ -281,6 +286,7 @@ class Router
                 }
                 */
 
+                $this->Sound->sendOsc('/kick');
             }
 
         }
