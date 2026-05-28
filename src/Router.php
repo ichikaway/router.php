@@ -286,7 +286,7 @@ class Router
                 }
                 */
 
-                $this->Sound->sendOsc('/kick');
+                $this->Sound->sendOsc();
             }
 
         }
