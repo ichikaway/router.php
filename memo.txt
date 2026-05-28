@@ -119,4 +119,22 @@ sysctl -w net.bridge.bridge-nf-call-arptables=0
  nft flush ruleset
 
 
+## super collider 設定
+
+ sudo apt install supercollider-server supercollider-language
+ sudo usermod -aG audio $USER
+ QT_QPA_PLATFORM=offscreen sclang -D scdファイル
+
+### サウンドカード一覧
+aplay -l
+
+alsamixer でボリューム調整。
+
+#### hw:0はラズパイのイヤホンジャックの音の調整
+echo /usr/bin/jackd -P75 -p16 -dalsa -dhw:0 -p1024 -n3 -zs > ~/.jackdrc
+
+#### hw:3はUSB外付けのサウンドブラスターの音の調整。番号は aplay -lコマンドで確認できる
+echo /usr/bin/jackd -P75 -p16 -dalsa -dhw:3 -p1024 -n3 -zs > ~/.jackdrc
+
+
 
