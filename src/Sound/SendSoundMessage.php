@@ -11,6 +11,10 @@ class SendSoundMessage
 
     private $socket;
 
+    private $lastTime;
+
+    private int $packetCount = 0;
+
     /**
      * @param string $host
      * @param int $port
@@ -20,6 +24,7 @@ class SendSoundMessage
         $this->host = $host;
         $this->port = $port;
         $this->socket = socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
+        $this->lastTime = time();
     }
 
     private function oscString(string $s): string
@@ -33,11 +38,27 @@ class SendSoundMessage
 
     public function sendOsc(string $address): void
     {
-        $packet =
-            $this->oscString($address) .
-            $this->oscString(',');
+        $now = time();
+        $this->packetCount++;
 
-        socket_sendto($this->socket, $packet, strlen($packet), 0, $this->host, $this->port);
+        if ($now !== $this->lastTime) {
+            $packet =
+                $this->oscString($address) .
+                $this->oscString(',');
+
+            if ($this->packetCount <= 10) {
+                //echo ".";
+                socket_sendto($this->socket, $packet, strlen($packet), 0, $this->host, $this->port);
+            } else if ($this->packetCount > 10) {
+                //echo "*";
+                socket_sendto($this->socket, $packet, strlen($packet), 0, $this->host, $this->port);
+                usleep(10000);
+                socket_sendto($this->socket, $packet, strlen($packet), 0, $this->host, $this->port);
+            }
+
+            $this->packetCount = 0;
+            $this->lastTime = $now;
+        }
     }
 
 }
