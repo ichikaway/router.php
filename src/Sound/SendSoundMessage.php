@@ -52,10 +52,10 @@ class SendSoundMessage
             if ($this->packetCount == 0) {
                 return;
             }
-            if ($this->packetCount <= 5) {
+            if ($this->packetCount <= 2) {
                 //echo ".";
                 socket_sendto($this->socket, $packet, strlen($packet), 0, $this->host, $this->port);
-            } else if ($this->packetCount > 5) {
+            } else if ($this->packetCount > 2) {
                 //echo "*";
                 if ($this->timingCount % 2 !== 0) {
                     $address = '/snare';
@@ -64,6 +64,14 @@ class SendSoundMessage
                         $this->oscString(',');
                 }
                 socket_sendto($this->socket, $packet, strlen($packet), 0, $this->host, $this->port);
+
+                if ($this->packetCount > 10) {
+                    $address = '/hihat';
+                    $packet =
+                        $this->oscString($address) .
+                        $this->oscString(',');
+                    socket_sendto($this->socket, $packet, strlen($packet), 0, $this->host, $this->port);
+                }
             }
             $this->timingCount++;
 
