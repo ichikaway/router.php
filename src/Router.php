@@ -289,7 +289,8 @@ class Router
                 if ($this->handleNic == 'eth0') {
                     $dstIp2 = long2ip($ip["dst"]);
                     echo ("  IP: $srcIp → $dstIp2, proto: {$ip['proto']}, TTL: {$ip['ttl']}\n");
-                    $this->Sound->sendOsc();
+                    //$this->Sound->sendOsc();
+                    $this->Sound->sendOscByPacketSize(strlen($dstPkt));
                 }
             }
 

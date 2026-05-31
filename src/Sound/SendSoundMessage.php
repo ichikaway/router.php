@@ -80,4 +80,24 @@ class SendSoundMessage
         }
     }
 
+    public function sendOscByPacketSize(int $dataSize): void
+    {
+        $now = microtime(true);
+        $address = '/kick';
+
+        if ($dataSize > 100) {
+            $address = '/snare';
+        }
+
+        if (($now - $this->lastTime) >= 0.25) {
+            $packet =
+                $this->oscString($address) .
+                $this->oscString(',');
+
+            socket_sendto($this->socket, $packet, strlen($packet), 0, $this->host, $this->port);
+
+            $this->lastTime = $now;
+        }
+    }
+
 }
