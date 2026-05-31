@@ -286,7 +286,8 @@ class Router
                 }
                 */
 
-                if ($this->handleNic == 'eth0') {
+                $typePing = 1;
+                if ($this->handleNic == 'eth0' && $ip['proto'] == $typePing) {
                     $dstIp2 = long2ip($ip["dst"]);
                     echo ("  IP: $srcIp → $dstIp2, proto: {$ip['proto']}, TTL: {$ip['ttl']}\n");
                     //$this->Sound->sendOsc();
