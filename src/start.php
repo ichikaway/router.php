@@ -10,6 +10,6 @@ $specifiedNicNameList = array_slice($argv, 1);
 
 $nic = (new DeviceInfo())->getDevice($specifiedNicNameList);
 
-$router = new Router($nic, new Dump(Dump::ALL));
-//$router = new Router($nic, new Dump(Dump::NONE));
+//$router = new Router($nic, new Dump(Dump::ALL));
+$router = new Router($nic, new Dump(Dump::NONE));
 $router->start();

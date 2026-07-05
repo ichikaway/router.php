@@ -9,9 +9,13 @@ use Network\Device;
 use Network\IpPacket;
 use Network\Netmask;
 use Xdp\XskSocket;
+use parallel\Runtime;
+use parallel\Channel;
 
 class Router
 {
+    private int $workerCount = 1;
+
     /** @var array<Device> $nic  */
     private array $nic = [];
 
@@ -101,10 +105,48 @@ class Router
     }
     public function start()
     {
+        // readはAF_XDP(XskSocket)、writeは既存のAF_PACKETソケットのままスレッドへ
+        // オフロードする(このRouterインスタンスの$this->socketsはRX専用のため
+        // ここでは別途write用のAF_PACKETソケットをワーカースレッド側に持たせる)
+        $nicList = array_keys($this->sockets);
+
+        $chan = [];
+
+        for ($i = 0; $i < $this->workerCount; $i++) {
+            $chanName = 'chann-' . $i;
+            $runtime[$i] = new Runtime();
+            $chan[$i] = Channel::make($chanName, Channel::Infinite);
+
+            $runtime[$i]->run(static function ($chanName) use ($nicList) : void {
+                $channel = Channel::open($chanName);
+
+                $sockets = [];
+
+                foreach ($nicList as $Device) {
+                    $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
+                    if ($socket === false) {
+                        die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
+                    }
+                    socket_bind($socket, $Device);
+                    $sockets[$Device] = $socket;
+                }
+
+                while (true) {
+                    list($frame, $deviceName) = $channel->recv();
+
+                    if ($frame === null) {
+                        break;
+                    }
+                    @socket_write($sockets[$deviceName], $frame, strlen($frame));
+                }
+            }, [$chanName]);
+        }
+
         var_dump($this->devices);
         while (true) {
             //$this->Dump->info("\n ===== start receive =====\n");
 
+            $cnt = 0;
             $readData = $this->readData();
             if ($readData === null) {
                 continue;
@@ -201,7 +243,12 @@ class Router
                     continue;
                 }
 
-                $this->sockets[$Device->getDeviceName()]->sendFrame($dstPkt);
+                $writeDeviceName = $Device->getDeviceName();
+                $chan[$cnt]->send([$dstPkt, $writeDeviceName]);
+                $cnt++;
+                if ($cnt >= $this->workerCount) {
+                    $cnt = 0;
+                }
             }
 
         }
