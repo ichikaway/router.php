@@ -8,13 +8,10 @@ use Dump\Dump;
 use Network\Device;
 use Network\IpPacket;
 use Network\Netmask;
-use parallel\Runtime;
-use parallel\Channel;
+use Xdp\XskSocket;
 
 class Router
 {
-    private int $workerCount = 1;
-
     /** @var array<Device> $nic  */
     private array $nic = [];
 
@@ -25,7 +22,7 @@ class Router
     /** @var array<string, Device> $devices */
     private readonly array $devices;
 
-    /** @var array<string, Socket> $sockets */
+    /** @var array<string, XskSocket> $sockets */
     private readonly array $sockets;
 
     private Dump $Dump;
@@ -54,20 +51,9 @@ class Router
 
         /** @var Device $Device */
         foreach ($nic as $Device) {
-            $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
-            if ($socket === false) {
-                die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
-            }
-            //socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => 5, 'usec' => 0]);
-
-            // このsocketから送信したデータはreadされないようにする
-            socket_set_option($socket, 263 /*SOL_PACKET*/, 23 /*PACKET_IGNORE_OUTGOING*/, 1);
-
-            socket_set_nonblock($socket);
-            //socket_set_option($socket, SOL_SOCKET, SO_SNDBUF, 10*1024*1024);
-            socket_bind($socket, $Device->getDeviceName());
-
-            $sockets[$Device->getDeviceName()] = $socket;
+            // AF_XDP(copyモード)。送信フレームが自分のRXリングに戻ることは
+            // 構造上ないため、AF_PACKET版にあったPACKET_IGNORE_OUTGOING相当は不要
+            $sockets[$Device->getDeviceName()] = new XskSocket($Device->getDeviceName(), $Device->getIpAddress());
             $devices[$Device->getDeviceName()] = $Device;
         }
         $this->sockets = $sockets;
@@ -88,154 +74,37 @@ class Router
 
     private function readData(): ?array {
         $readData = [];
-        if ($this->handleNic !== null) {
-            //$this->Dump->debug("handleNic: " . $this->handleNic . "\n");
-            $read = [$this->sockets[$this->handleNic]];
-        } else {
-            $read = array_values($this->sockets);
-        }
-        $write = null;
-        $except = null;
-        socket_select($read, $write, $except, 1);
 
-        if (count($read) === 0) {
-            //$this->Dump->debug("socket select again.\n");
+        if ($this->handleNic !== null) {
+            $targets = [$this->sockets[$this->handleNic]];
+        } else {
+            $targets = array_values($this->sockets);
+        }
+
+        // AF_XDPは非ブロッキングのポーリングなので、select相当は行わず
+        // 各ソケットを直接ドレインする(1回の呼び出しで最大200フレームまで)
+        foreach ($targets as $socket) {
+            $n = 0;
+            while (($frame = $socket->recvFrame()) !== null) {
+                $readData[] = $frame;
+                if (++$n >= 200) {
+                    break;
+                }
+            }
+        }
+
+        if (count($readData) === 0) {
             return null;
         }
-
-        /*
-        // 1回のselectで1回のreadのみ実行
-        foreach ($read as $socket) {
-            //$nicName = array_search($socket, $this->sockets, true);
-            //$this->Dump->debug("read from {$nicName} \n");
-            //イーサフレームは1514バイトだが、ジャンボフレームなども考慮して65535にした
-            $data = @socket_read($socket, 65535);
-            //$data = '';
-            //$ret = @socket_recv($socket, $data, 65535, 0); // 1 recv = 1 frame
-
-            if ($data === false || $data === '') {
-                $this->Dump->error("read timeout or error \n");
-            } else {
-                $this->Dump->debug("socket_recv buf: " . bin2hex($data) . "\n");
-                $readData[] = $data;
-            }
-        }
-        */
-
-        //Drain read
-        // 1回のselectで届いたイーサフレームをできるかぎりreadする
-        foreach ($read as $socket) {
-            $n = 0;
-
-            while (true) {
-                $buf = '';
-                //イーサフレームは1514バイトだが、ジャンボフレームなども考慮して65535に
-                //$ret = @socket_recv($socket, $buf, 65535, 0); // 1 recv = 1 frame
-                $ret = @socket_recv($socket, $buf, 1600, 0); // 1 recv = 1 frame
-
-                //$this->Dump->debug("socket_recv buf: " . bin2hex($buf) . "\n");
-                if ($ret === false) {
-                    $err = socket_last_error($socket);
-
-                    // EAGAIN/EWOULDBLOCK: もう読み尽くした
-                    if ($err === SOCKET_EAGAIN || $err === SOCKET_EWOULDBLOCK) {
-                        socket_clear_error($socket);
-                        break;
-                    }
-
-                    // それ以外はエラーとして扱う
-                    throw new RuntimeException("socket_recv error: " . socket_strerror($err));
-                }
-
-                if ($ret === 0) {
-                    // RAW/AF_PACKETで 0 は基本出にくいが、念のため脱出
-                    break;
-                }
-
-                $readData[] = $buf;
-                // 飢餓防止（他ソケットのチャンスを残す）
-                // 128や64は多すぎたため32が適正だった <- これはスレッド対応前の話でsocket writeの処理が重かったので32ぐらいが適正だった
-                // スレッド対応したら処理回数が増やせたので、Drain readの上限を200にするとさらにスループット出た
-                if (++$n >= 200) { // 上限は調整
-                    //echo "break";
-                    break;
-                }
-            }
-        }
-
-        /*
-        // 低速版の処理。
-        // データ受信. スレッドは使わないためnicを順番にreadして最大1秒でタイムアウトさせて次のnicから読み込み
-        $data = null;
-        for($readCount = 0 ; true; $readCount++) {
-            foreach ($this->sockets as $nicName => $socket) {
-                echo "read from {$nicName} \n";
-                $data = @socket_read($socket, 8000);
-                if ($data === false || $data === '') {
-                    echo "タイムアウト: {$readCount} \n";
-                } else {
-                    break 2;
-                }
-            }
-            if ($readCount > 10) {
-                echo "タイムアウト: TCPパケットを受信できませんでした。\n";
-                return $data;
-            }
-        }
-        */
 
         return $readData;
     }
     public function start()
     {
-
-        $nicList = array_keys($this->sockets);
-
-        $chan = [];
-
-        for ($i = 0; $i < $this->workerCount; $i++) {
-            $chanName = 'chann-' . $i;
-            $runtime[$i] = new Runtime();
-            $chan[$i] = Channel::make($chanName, Channel::Infinite);
-
-            $runtime[$i]->run(static function ($chanName) use ($nicList) : void {
-                $channel = Channel::open($chanName);
-
-                $sockets = [];
-
-                foreach ($nicList as $Device) {
-                    $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
-                    if ($socket === false) {
-                        die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
-                    }
-
-                    // このsocketから送信したデータはreadされないようにする
-                    socket_set_option($socket, 263 /*SOL_PACKET*/, 23 /*PACKET_IGNORE_OUTGOING*/, 1);
-
-                    socket_set_nonblock($socket);
-                    //socket_set_option($socket, SOL_SOCKET, SO_SNDBUF, 10*1024*1024);
-                    socket_bind($socket, $Device);
-                    $sockets[$Device] = $socket;
-                }
-
-                while (true) {
-                    list($frame,$deviceName) = $channel->recv();
-
-                    if ($frame === null) {
-                        break;
-                    }
-                    //echo "socket write in thread {$i}. {$deviceName}\n";
-                    @socket_write($sockets[$deviceName], $frame, strlen($frame));
-                }
-            }, [$chanName]);
-        }
-
-
         var_dump($this->devices);
         while (true) {
             //$this->Dump->info("\n ===== start receive =====\n");
 
-            $cnt = 0;
             $readData = $this->readData();
             if ($readData === null) {
                 continue;
@@ -332,26 +201,7 @@ class Router
                     continue;
                 }
 
-                //socket_write($this->sockets[$Device->getDeviceName()], $dstPkt, strlen($dstPkt));
-                $writeDeviceName = $Device->getDeviceName();
-                $chan[$cnt]->send([$dstPkt, $writeDeviceName]);
-                $cnt++;
-                if ($cnt >= $this->workerCount) {
-                    $cnt = 0;
-                }
-                /*
-                //データ送信でエラーがでてるか確認したが、iperfでもエラーがでてなかったのでコメントアウト
-                if ($sendByte === false) {
-                    var_dump("Error writing to socket\n");
-                }
-                if ($sendByte !== strlen($dstPkt)) {
-                    var_dump("Error writing to socket. sendByte: {$sendByte}\n");
-                }
-                if ($sendByte > 1000) {
-                    var_dump("sendByte: {$sendByte}\n");
-                }
-                */
-
+                $this->sockets[$Device->getDeviceName()]->sendFrame($dstPkt);
             }
 
         }

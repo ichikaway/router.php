@@ -8,3 +8,5 @@ tools
 a.out
 tmp
 composer.phar
+src/c/*.o
+src/c/*.so

@@ -8,4 +8,6 @@
 #
 #nft flush ruleset
 
+make -C /router/src/c || true
+
 tail -f /dev/null
