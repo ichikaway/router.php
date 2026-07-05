@@ -55,9 +55,14 @@ class Router
 
         /** @var Device $Device */
         foreach ($nic as $Device) {
-            // AF_XDP(copyモード)。送信フレームが自分のRXリングに戻ることは
-            // 構造上ないため、AF_PACKET版にあったPACKET_IGNORE_OUTGOING相当は不要
-            $sockets[$Device->getDeviceName()] = new XskSocket($Device->getDeviceName(), $Device->getIpAddress());
+            // AF_XDPのXSKMAPは(インターフェース, queue)ごとに1ソケットしか登録できず、
+            // 後から同じNICでxdpphp_open()したプロセスがプログラムごと差し替えてしまう。
+            // start_eth0.php/start_eth1.phpのようにプロセスを分けてNICごとにreadする
+            // 構成では、$handleNicが指定するNIC以外にAF_XDP受信ソケットを作ってはいけない。
+            // (write用のAF_PACKETソケットは全NIC分必要なため$devicesは常に全件保持する)
+            if ($handleNic === null || $Device->getDeviceName() === $handleNic) {
+                $sockets[$Device->getDeviceName()] = new XskSocket($Device->getDeviceName(), $Device->getIpAddress());
+            }
             $devices[$Device->getDeviceName()] = $Device;
         }
         $this->sockets = $sockets;
@@ -106,9 +111,9 @@ class Router
     public function start()
     {
         // readはAF_XDP(XskSocket)、writeは既存のAF_PACKETソケットのままスレッドへ
-        // オフロードする(このRouterインスタンスの$this->socketsはRX専用のため
-        // ここでは別途write用のAF_PACKETソケットをワーカースレッド側に持たせる)
-        $nicList = array_keys($this->sockets);
+        // オフロードする。write側は$handleNicに関わらずどのNICにも転送しうるため、
+        // $this->sockets(handleNicで絞られたRX専用)ではなく$this->devices(全NIC)から作る
+        $nicList = array_keys($this->devices);
 
         $chan = [];
 
