@@ -61,7 +61,7 @@ class Router
             // 構成では、$handleNicが指定するNIC以外にAF_XDP受信ソケットを作ってはいけない。
             // (write用のAF_PACKETソケットは全NIC分必要なため$devicesは常に全件保持する)
             if ($handleNic === null || $Device->getDeviceName() === $handleNic) {
-                $sockets[$Device->getDeviceName()] = new XskSocket($Device->getDeviceName(), $Device->getIpAddress());
+                $sockets[$Device->getDeviceName()] = XskSocket::open($Device->getDeviceName(), $Device->getIpAddress());
             }
             $devices[$Device->getDeviceName()] = $Device;
         }
@@ -110,30 +110,51 @@ class Router
     }
     public function start()
     {
-        // readはAF_XDP(XskSocket)、writeは既存のAF_PACKETソケットのままスレッドへ
-        // オフロードする。write側は$handleNicに関わらずどのNICにも転送しうるため、
-        // $this->sockets(handleNicで絞られたRX専用)ではなく$this->devices(全NIC)から作る
+        // readはAF_XDP(XskSocket)。writeも同じAF_XDPハンドルのTX ringを使って
+        // 別スレッド(parallel)からsendFrame()するが、これは全NICのAF_XDPハンドルが
+        // 同一プロセス内にある場合(=単一プロセス構成, handleNic===null)にしか成立
+        // しない。2プロセス構成(start_eth0.php/start_eth1.php)では他方のNICの
+        // ハンドルはこのプロセス内に無いため、従来通りAF_PACKET+スレッドにフォール
+        // バックする(詳細はXskSocket::fromHandleAddress()のコメント参照)。
         $nicList = array_keys($this->devices);
+
+        $useXdpWrite = $this->handleNic === null && count($this->sockets) === count($this->devices);
+
+        $xdpHandleAddresses = [];
+        if ($useXdpWrite) {
+            foreach ($this->sockets as $deviceName => $socket) {
+                $xdpHandleAddresses[$deviceName] = $socket->getHandleAddress();
+            }
+        }
 
         $chan = [];
 
         for ($i = 0; $i < $this->workerCount; $i++) {
             $chanName = 'chann-' . $i;
-            $runtime[$i] = new Runtime();
+            $runtime[$i] = new Runtime(__DIR__ . '/../vendor/autoload.php');
             $chan[$i] = Channel::make($chanName, Channel::Infinite);
 
-            $runtime[$i]->run(static function ($chanName) use ($nicList) : void {
+            $runtime[$i]->run(static function ($chanName, $xdpHandleAddresses) use ($nicList) : void {
                 $channel = Channel::open($chanName);
 
-                $sockets = [];
+                $xdpSockets = [];
+                $packetSockets = [];
 
-                foreach ($nicList as $Device) {
+                foreach ($nicList as $deviceName) {
+                    if (isset($xdpHandleAddresses[$deviceName])) {
+                        $xdpSockets[$deviceName] = XskSocket::fromHandleAddress(
+                            $deviceName,
+                            $xdpHandleAddresses[$deviceName],
+                        );
+                        continue;
+                    }
+
                     $socket = socket_create(AF_PACKET, SOCK_RAW, ETH_P_IP);
                     if ($socket === false) {
                         die("ソケットの作成に失敗しました: " . socket_strerror(socket_last_error()));
                     }
-                    socket_bind($socket, $Device);
-                    $sockets[$Device] = $socket;
+                    socket_bind($socket, $deviceName);
+                    $packetSockets[$deviceName] = $socket;
                 }
 
                 while (true) {
@@ -142,9 +163,14 @@ class Router
                     if ($frame === null) {
                         break;
                     }
-                    @socket_write($sockets[$deviceName], $frame, strlen($frame));
+
+                    if (isset($xdpSockets[$deviceName])) {
+                        $xdpSockets[$deviceName]->sendFrame($frame);
+                        continue;
+                    }
+                    @socket_write($packetSockets[$deviceName], $frame, strlen($frame));
                 }
-            }, [$chanName]);
+            }, [$chanName, $xdpHandleAddresses]);
         }
 
         var_dump($this->devices);

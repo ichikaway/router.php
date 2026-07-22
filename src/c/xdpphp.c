@@ -1,9 +1,15 @@
 /* SPDX-License-Identifier: GPL-2.0
  *
- * PHP FFIから呼び出すための、AF_XDP(copyモード, RX専用)の薄いラッパー。
- * PHP側にはopaqueハンドルと非ブロッキングのrecv関数だけを見せる。
- * fill ringによるUMEMフレームの再利用はすべてこの層で完結させる。
- * 書き込みは既存のAF_PACKETソケット(PHP側)で行うため、送信機能は持たない。
+ * PHP FFIから呼び出すための、AF_XDP(copyモード)の薄いラッパー。
+ * PHP側にはopaqueハンドルと非ブロッキングのrecv/send関数だけを見せる。
+ * fill/completion ringによるUMEMフレームの再利用はすべてこの層で完結させる。
+ *
+ * recv()とsend()は同じxdpphp_socket_tハンドルを異なるOSスレッドから同時に
+ * 呼び出せる設計になっている(単一プロセス内でRXはメインスレッド、TXは
+ * parallelのワーカースレッドが担う想定)。recvはrx/fillリングのみ、sendは
+ * tx/compリングのみを触り、UMEM上のフレーム領域もRX用/TX用で完全に分離して
+ * いるため、ロック無しでも競合しない。ただしこの前提が崩れる呼び方
+ * (例: 同じハンドルのrecvを複数スレッドから同時に呼ぶ)はサポートしない。
  */
 
 #include <stdio.h>
@@ -31,7 +37,11 @@
 
 #define XDPPHP_FRAME_SIZE     2048u
 #define XDPPHP_NUM_RX_FRAMES  2048u
-#define XDPPHP_UMEM_SIZE      ((uint64_t)XDPPHP_NUM_RX_FRAMES * XDPPHP_FRAME_SIZE)
+#define XDPPHP_NUM_TX_FRAMES  2048u
+#define XDPPHP_NUM_FRAMES     (XDPPHP_NUM_RX_FRAMES + XDPPHP_NUM_TX_FRAMES)
+#define XDPPHP_UMEM_SIZE      ((uint64_t)XDPPHP_NUM_FRAMES * XDPPHP_FRAME_SIZE)
+
+#define XDPPHP_COMP_BATCH     64u
 
 struct xdpphp_socket {
     struct xsk_umem   *umem;
@@ -39,10 +49,14 @@ struct xdpphp_socket {
     struct xsk_ring_prod fill;
     struct xsk_ring_cons comp;
     struct xsk_ring_cons rx;
+    struct xsk_ring_prod tx;
     void     *umem_area;
     struct bpf_object *obj;
     int       ifindex;
     int       xsk_fd;
+    /* tx_free/tx_free_countはsend側スレッドのみが読み書きする */
+    uint64_t  tx_free[XDPPHP_NUM_TX_FRAMES];
+    uint32_t  tx_free_count;
 };
 
 static __thread char xdpphp_err[256] = "";
@@ -173,7 +187,7 @@ struct xdpphp_socket *xdpphp_open(const char *ifname, unsigned int queue_id,
 
     struct xsk_umem_config umem_cfg = {
         .fill_size = XDPPHP_NUM_RX_FRAMES,
-        .comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS, /* TXは使わないが umem 作成上必要、常に空のまま */
+        .comp_size = XDPPHP_NUM_TX_FRAMES,
         .frame_size = XDPPHP_FRAME_SIZE,
         .frame_headroom = 0,
         .flags = 0,
@@ -187,13 +201,13 @@ struct xdpphp_socket *xdpphp_open(const char *ifname, unsigned int queue_id,
 
     struct xsk_socket_config xsk_cfg = {
         .rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
-        .tx_size = 0, /* RX専用: TXリングは作らない */
+        .tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
         .libxdp_flags = XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD,
         .xdp_flags = 0,
         .bind_flags = XDP_COPY, /* vethはDMA非対応のためzero-copyを強制せずcopyモード固定 */
     };
     ret = xsk_socket__create(&sock->xsk, ifname, queue_id, sock->umem,
-                              &sock->rx, NULL, &xsk_cfg);
+                              &sock->rx, &sock->tx, &xsk_cfg);
     if (ret) {
         set_error("xsk_socket__create failed on %s queue %u: %d (%s)",
                   ifname, queue_id, ret, strerror(-ret));
@@ -213,6 +227,12 @@ struct xdpphp_socket *xdpphp_open(const char *ifname, unsigned int queue_id,
         *xsk_ring_prod__fill_addr(&sock->fill, idx + i) = (uint64_t)i * XDPPHP_FRAME_SIZE;
     }
     xsk_ring_prod__submit(&sock->fill, reserved);
+
+    /* TX用フレームのfree-listを初期化 (addr: RX_FRAMES .. NUM_FRAMES-1 * FRAME_SIZE) */
+    for (uint32_t i = 0; i < XDPPHP_NUM_TX_FRAMES; i++) {
+        sock->tx_free[i] = (uint64_t)(XDPPHP_NUM_RX_FRAMES + i) * XDPPHP_FRAME_SIZE;
+    }
+    sock->tx_free_count = XDPPHP_NUM_TX_FRAMES;
 
     return sock;
 
@@ -245,4 +265,57 @@ long xdpphp_recv(struct xdpphp_socket *sock, unsigned char *buf, unsigned long b
     }
 
     return (long)copy_len;
+}
+
+static void xdpphp_drain_completions(struct xdpphp_socket *sock)
+{
+    uint32_t idx = 0;
+    uint32_t n = xsk_ring_cons__peek(&sock->comp, XDPPHP_COMP_BATCH, &idx);
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t addr = *xsk_ring_cons__comp_addr(&sock->comp, idx + i);
+        if (sock->tx_free_count < XDPPHP_NUM_TX_FRAMES) {
+            sock->tx_free[sock->tx_free_count++] = addr;
+        }
+    }
+    if (n)
+        xsk_ring_cons__release(&sock->comp, n);
+}
+
+/* 送信専用。recvと同じハンドルを別スレッドから呼んでよい(ファイル先頭のコメント参照)。 */
+int xdpphp_send(struct xdpphp_socket *sock, const unsigned char *buf, unsigned long len)
+{
+    xdpphp_drain_completions(sock);
+
+    if (sock->tx_free_count == 0)
+        return 0; /* バックプレッシャー: 送らずdrop (既存socket_writeも未チェックのため同等) */
+
+    if (len > XDPPHP_FRAME_SIZE)
+        len = XDPPHP_FRAME_SIZE;
+
+    uint32_t idx = 0;
+    if (xsk_ring_prod__reserve(&sock->tx, 1, &idx) != 1)
+        return 0;
+
+    uint64_t addr = sock->tx_free[--sock->tx_free_count];
+    memcpy((unsigned char *)sock->umem_area + addr, buf, len);
+
+    struct xdp_desc *desc = xsk_ring_prod__tx_desc(&sock->tx, idx);
+    desc->addr = addr;
+    desc->len = (uint32_t)len;
+    desc->options = 0;
+
+    xsk_ring_prod__submit(&sock->tx, 1);
+
+    if (xsk_ring_prod__needs_wakeup(&sock->tx))
+        sendto(sock->xsk_fd, NULL, 0, MSG_DONTWAIT, NULL, 0);
+
+    return 1;
+}
+
+/* handleの生アドレスをuintptr_tとして返す。単一プロセス内の別スレッド(parallel
+ * のRuntime)がFFI::cast()でポインタを再構築し、同じハンドルに対してxdpphp_send()を
+ * 呼び出すために使う。プロセスをまたいだ共有はできない(単なる仮想アドレスのため)。 */
+uintptr_t xdpphp_handle_address(struct xdpphp_socket *sock)
+{
+    return (uintptr_t)sock;
 }
