@@ -19,6 +19,7 @@ final class XskSocket
         typedef struct xdpphp_socket xdpphp_socket_t;
 
         xdpphp_socket_t *xdpphp_open(const char *ifname, unsigned int queue_id, const char *bpf_obj_path, const char *self_ipv4);
+        xdpphp_socket_t *xdpphp_open_tx(const char *ifname, unsigned int queue_id);
         void xdpphp_close(xdpphp_socket_t *sock);
         long xdpphp_recv(xdpphp_socket_t *sock, unsigned char *buf, unsigned long buf_len);
         int  xdpphp_send(xdpphp_socket_t *sock, const unsigned char *buf, unsigned long len);
@@ -32,8 +33,12 @@ final class XskSocket
 
     private ?\FFI\CData $recvBuf = null;
 
-    /** trueのインスタンスのみ__destruct()でxdpphp_closeする(TX用の借り物ハンドルは閉じない) */
-    private bool $ownsHandle;
+    /**
+     * trueのインスタンスのみ__destruct()でxdpphp_closeする(TX用の借り物ハンドルは閉じない)。
+     * デフォルトfalseで初期化しておく: open()系メソッドが$handle設定前に例外を投げた場合、
+     * デストラクタが未初期化プロパティを読んでFatal Errorになるのを防ぐため。
+     */
+    private bool $ownsHandle = false;
 
     private function __construct(
         private readonly string $deviceName,
@@ -53,9 +58,32 @@ final class XskSocket
 
         $bpfObjPath = __DIR__ . '/../c/xdp_filter.bpf.o';
         $handle = self::$ffi->xdpphp_open($deviceName, $queueId, $bpfObjPath, $selfIpv4);
-        if (\FFI::isNull($handle)) {
+        if ($handle === null || \FFI::isNull($handle)) {
             throw new \RuntimeException(
                 "xdpphp_open failed for {$deviceName}: " . self::$ffi->xdpphp_last_error()
+            );
+        }
+        $instance->handle = $handle;
+        $instance->ownsHandle = true;
+
+        return $instance;
+    }
+
+    /**
+     * TX専用のAF_XDPソケットを新規に開く。BPFプログラムのロード/attachやxsks_map
+     * 登録を一切行わないため、read側をAF_PACKETに戻した構成のwriteワーカースレッド
+     * から(プロセス間の排他制約を気にせず)直接呼び出せる。
+     */
+    public static function openTxOnly(string $deviceName, int $queueId = 0): self
+    {
+        self::$ffi ??= \FFI::cdef(self::CDEF, __DIR__ . '/../c/libxdpphp.so');
+
+        $instance = new self($deviceName);
+
+        $handle = self::$ffi->xdpphp_open_tx($deviceName, $queueId);
+        if ($handle === null || \FFI::isNull($handle)) {
+            throw new \RuntimeException(
+                "xdpphp_open_tx failed for {$deviceName}: " . self::$ffi->xdpphp_last_error()
             );
         }
         $instance->handle = $handle;

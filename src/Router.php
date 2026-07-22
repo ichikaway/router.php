@@ -26,7 +26,7 @@ class Router
     /** @var array<string, Device> $devices */
     private readonly array $devices;
 
-    /** @var array<string, XskSocket> $sockets */
+    /** @var array<string, XskSocket> $sockets AF_XDPのRX+TX兼用ハンドル(自NIC分のみ) */
     private readonly array $sockets;
 
     private Dump $Dump;
@@ -55,11 +55,13 @@ class Router
 
         /** @var Device $Device */
         foreach ($nic as $Device) {
-            // AF_XDPのXSKMAPは(インターフェース, queue)ごとに1ソケットしか登録できず、
-            // 後から同じNICでxdpphp_open()したプロセスがプログラムごと差し替えてしまう。
+            // readはAF_XDP(XskSocket::open(), RX+TX兼用ハンドル)。AF_XDPのXSKMAPは
+            // (インターフェース, queue)ごとに1ソケットしか登録できず、後から同じNICで
+            // xdpphp_open()したプロセスがプログラムごと差し替えてしまう。
             // start_eth0.php/start_eth1.phpのようにプロセスを分けてNICごとにreadする
             // 構成では、$handleNicが指定するNIC以外にAF_XDP受信ソケットを作ってはいけない。
-            // (write用のAF_PACKETソケットは全NIC分必要なため$devicesは常に全件保持する)
+            // (write用のAF_PACKETフォールバックソケットは全NIC分必要なため$devicesは
+            // 常に全件保持する)
             if ($handleNic === null || $Device->getDeviceName() === $handleNic) {
                 $sockets[$Device->getDeviceName()] = XskSocket::open($Device->getDeviceName(), $Device->getIpAddress());
             }
@@ -110,21 +112,18 @@ class Router
     }
     public function start()
     {
-        // readはAF_XDP(XskSocket)。writeも同じAF_XDPハンドルのTX ringを使って
-        // 別スレッド(parallel)からsendFrame()するが、これは全NICのAF_XDPハンドルが
-        // 同一プロセス内にある場合(=単一プロセス構成, handleNic===null)にしか成立
-        // しない。2プロセス構成(start_eth0.php/start_eth1.php)では他方のNICの
-        // ハンドルはこのプロセス内に無いため、従来通りAF_PACKET+スレッドにフォール
-        // バックする(詳細はXskSocket::fromHandleAddress()のコメント参照)。
+        // readはAF_XDP(XskSocket, RX+TX兼用ハンドル、自NIC分のみ)。writeも自NIC宛て分は
+        // 同じハンドルのTX ringを、別スレッド(parallel)からsendFrame()で使う。
+        // AF_XDPのbind()は(ifindex, queue)単位で排他的なため、他プロセスが読んでいる
+        // NIC(他NIC)へはこのプロセスからAF_XDPで書き込めない(実測でEBUSY確認済み)。
+        // そのため他NIC宛ての書き込みは従来通りAF_PACKETにフォールバックする。
+        // $this->socketsに無いNIC(=他プロセスが担当するNIC)は自動的にこのフォール
+        // バック経路になる。
         $nicList = array_keys($this->devices);
 
-        $useXdpWrite = $this->handleNic === null && count($this->sockets) === count($this->devices);
-
         $xdpHandleAddresses = [];
-        if ($useXdpWrite) {
-            foreach ($this->sockets as $deviceName => $socket) {
-                $xdpHandleAddresses[$deviceName] = $socket->getHandleAddress();
-            }
+        foreach ($this->sockets as $deviceName => $socket) {
+            $xdpHandleAddresses[$deviceName] = $socket->getHandleAddress();
         }
 
         $chan = [];

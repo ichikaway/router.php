@@ -96,6 +96,78 @@ void xdpphp_close(struct xdpphp_socket *sock)
     xdpphp_teardown(sock);
 }
 
+/* TX専用オープン。BPFプログラムのロード/attachもxsks_map/self_ip4への登録も行わない
+ * (RXリダイレクトを一切使わないため不要)。そのためNIC+queueの排他制約(xsks_mapは
+ * 1組しか登録できない)を気にせず、read側をAF_PACKETに戻した構成のwriteスレッドから
+ * 直接呼べる。TXリング/completion ringのみを使う。 */
+struct xdpphp_socket *xdpphp_open_tx(const char *ifname, unsigned int queue_id)
+{
+    struct rlimit rlim = { RLIM_INFINITY, RLIM_INFINITY };
+    setrlimit(RLIMIT_MEMLOCK, &rlim);
+
+    struct xdpphp_socket *sock = calloc(1, sizeof(*sock));
+    if (!sock) {
+        set_error("calloc failed: %s", strerror(errno));
+        return NULL;
+    }
+
+    sock->ifindex = if_nametoindex(ifname);
+    if (sock->ifindex == 0) {
+        set_error("if_nametoindex(%s) failed: %s", ifname, strerror(errno));
+        goto fail;
+    }
+
+    sock->umem_area = mmap(NULL, XDPPHP_UMEM_SIZE, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (sock->umem_area == MAP_FAILED) {
+        set_error("mmap umem (%lu bytes) failed: %s",
+                  (unsigned long)XDPPHP_UMEM_SIZE, strerror(errno));
+        goto fail;
+    }
+
+    struct xsk_umem_config umem_cfg = {
+        .fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS, /* RXは使わないが umem 作成上必要、常に空のまま */
+        .comp_size = XDPPHP_NUM_TX_FRAMES,
+        .frame_size = XDPPHP_FRAME_SIZE,
+        .frame_headroom = 0,
+        .flags = 0,
+    };
+    int ret = xsk_umem__create(&sock->umem, sock->umem_area, XDPPHP_UMEM_SIZE,
+                                &sock->fill, &sock->comp, &umem_cfg);
+    if (ret) {
+        set_error("xsk_umem__create failed: %d (%s)", ret, strerror(-ret));
+        goto fail;
+    }
+
+    struct xsk_socket_config xsk_cfg = {
+        .rx_size = 0, /* TX専用: RXリングは作らない */
+        .tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
+        .libxdp_flags = XSK_LIBBPF_FLAGS__INHIBIT_PROG_LOAD, /* デフォルトプログラムの自動ロードも不要 */
+        .xdp_flags = 0,
+        .bind_flags = XDP_COPY,
+    };
+    ret = xsk_socket__create(&sock->xsk, ifname, queue_id, sock->umem,
+                              NULL, &sock->tx, &xsk_cfg);
+    if (ret) {
+        set_error("xsk_socket__create(tx-only) failed on %s queue %u: %d (%s)",
+                  ifname, queue_id, ret, strerror(-ret));
+        goto fail;
+    }
+    sock->xsk_fd = xsk_socket__fd(sock->xsk);
+
+    /* TX用フレームのfree-listを初期化 (addr: RX_FRAMES .. NUM_FRAMES-1 * FRAME_SIZE) */
+    for (uint32_t i = 0; i < XDPPHP_NUM_TX_FRAMES; i++) {
+        sock->tx_free[i] = (uint64_t)(XDPPHP_NUM_RX_FRAMES + i) * XDPPHP_FRAME_SIZE;
+    }
+    sock->tx_free_count = XDPPHP_NUM_TX_FRAMES;
+
+    return sock;
+
+fail:
+    xdpphp_teardown(sock);
+    return NULL;
+}
+
 struct xdpphp_socket *xdpphp_open(const char *ifname, unsigned int queue_id,
                                    const char *bpf_obj_path, const char *self_ipv4)
 {
