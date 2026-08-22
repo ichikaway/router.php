@@ -9,8 +9,8 @@ class Device
     private readonly string $ipAddress;
     private readonly string $netmask;
 
-    private readonly string $ipAddressLong;
-    private readonly string $netMaskLong;
+    private readonly int $ipAddressLong;
+    private readonly int $netMaskLong;
     private readonly string $binaryMacAddress;
     /**
      * @param string $deviceName
@@ -53,12 +53,12 @@ class Device
         return $this->netmask;
     }
 
-    public function getIpAddressLong(): string
+    public function getIpAddressLong(): int
     {
         return $this->ipAddressLong;
     }
 
-    public function getNetMaskLong(): string
+    public function getNetMaskLong(): int
     {
         return $this->netMaskLong;
     }
