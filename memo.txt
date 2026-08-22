@@ -31,10 +31,10 @@ nc -u -l 8888
 ## iperf計測
 Alice
  UDP計測
- iperf3 -c 10.0.1.10  -u -b 700M -P 4 -t 10
+ iperf3 -c 10.0.1.10  -u -b 700M -P 2 -t 10
 
  TCP計測
- iperf3 -c 10.0.1.10  -P 4 -t 10
+ iperf3 -c 10.0.1.10  -P 2 -t 10
 
 Bob(server)
  iperf3 -s
