@@ -456,9 +456,9 @@ class Router
 
         //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
         //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
-        $dstPkt = substr_replace($data, macToBinary($dstNewMac) . $this->devMacBin[$devIdx], 0, 12);
+        $dstPkt = substr_replace($data, $dstNewMac . $this->devMacBin[$devIdx], 0, 12);
         // substr_replaceの方が、下のsubstr組み合わせよりも少しはやい
-        //$dstPkt = macToBinary($dstNewMac) . $this->devMacBin[$devIdx] . substr($data, 12);
+        //$dstPkt = $dstNewMac . $this->devMacBin[$devIdx] . substr($data, 12);
 
         //$this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
 
@@ -467,7 +467,7 @@ class Router
     }
 
     /**
-     * next hopのIP(int)からMACアドレスを返す。解決できなければ空文字
+     * next hopのIP(int)からMACアドレスをバイナリ6バイトで返す。解決できなければ空文字
      */
     private function getMacAddress(int $nextHopLong, int $devIdx): string
     {
@@ -500,12 +500,13 @@ class Router
         }
 
         // ARP解決したIPをキャッシュ
-        $this->arpTable->add($nextHopLong, $dstNewMac);
+        // 転送時に毎回macToBinary()しなくて済むよう、バイナリ6バイトに変換してから保存する
+        $dstNewMacBin = macToBinary($dstNewMac);
+        $this->arpTable->add($nextHopLong, $dstNewMacBin);
 
         //$this->Dump->debug("=== ARP reply ===\n");
-        //$this->Dump->debug("Dest MAC(bin2hex: " . bin2hex($dstNewMac));
-        //$this->Dump->debug("Dest MAC(hexToMac): " . hexToMac($dstNewMac));
+        //$this->Dump->debug("Dest MAC(bin2hex: " . bin2hex($dstNewMacBin));
 
-        return $dstNewMac;
+        return $dstNewMacBin;
     }
 }
