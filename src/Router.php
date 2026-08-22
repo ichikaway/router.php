@@ -293,6 +293,7 @@ class Router
         $devNameList     = $this->devName;
         $defaultDevIdx   = $this->defaultDevIdx;
         $defaultGwLong   = $this->defaultGwLong;
+        $workerCount     = $this->workerCount;
 
         while (true) {
             //$this->Dump->info("\n ===== start receive =====\n");
@@ -310,8 +311,6 @@ class Router
                 // --- Ethernet header (14 bytes)
                 $pkt = $data;
                 //$dstMac = unpack("H*", substr($pkt, 0, 6))[1];
-                // Deviceが持つMACアドレスはバイナリ6バイトなので、比較できるようバイナリのまま取り出す
-                $srcMac = substr($pkt, 6, 6);
                 // EtherTypeの2バイトはord()で合成する。unpack()はsubstrと結果配列を作るぶん遅い
                 $ethType = (ord($pkt[12]) << 8) | ord($pkt[13]); // network-order (big endian)
 
@@ -358,6 +357,11 @@ class Router
                     continue;
                 }
 
+                // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
+                // Deviceが持つMACアドレスはバイナリ6バイトなので、比較できるようバイナリのまま取り出す
+                // 早期にスルーするパケットではsubstr()を実行しないよう、ここまで遅らせている
+                $srcMacBin = substr($pkt, 6, 6);
+
                 for ($d = 0; $d < $devCount; $d++) {
                     // 自分のNIC宛のIPアドレスの場合はスルーする。
                     // in_array()は毎回配列を確保するうえ緩い比較になるので === の比較にする
@@ -367,9 +371,8 @@ class Router
                         continue 2; // whileループのcontinueを行う
                     }
 
-                    // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
-                    if ($srcMac === $devMacBinList[$d]) {
-                        //$this->Dump->debug("Skip: packet from my NIC. nothing to do. \n");
+                    if ($srcMacBin === $devMacBinList[$d]) {
+                        //$this->Dump->debug("Skip: packet from my NIC({$this->devName[$d]}). nothing to do. \n");
                         continue 2;
                     }
                 }
@@ -413,7 +416,7 @@ class Router
                 $writeDeviceName = $devNameList[$devIdx];
                 $chan[$cnt]->send([$dstPkt, $writeDeviceName]);
                 $cnt++;
-                if ($cnt >= $this->workerCount) {
+                if ($cnt >= $workerCount) {
                     $cnt = 0;
                 }
                 /*

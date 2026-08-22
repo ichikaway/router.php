@@ -29,19 +29,14 @@ class ArpCache
     {
         if (isset($this->arpTable[$key])) {
             // 一定回数以上参照できた場合は念のためキャッシュをクリアしてもう一度Arpを検索する
-            $this->expireCount++;
-            if ($this->isExpired()) {
+            // パケット毎に通るためisExpired()のメソッド呼び出しはインライン化
+            if (++$this->expireCount > $this->expireLimit) {
                 $this->resetArpTable();
                 return null;
             }
             return $this->arpTable[$key];
         }
         return null;
-    }
-
-    private function isExpired(): bool
-    {
-        return $this->expireCount > $this->expireLimit;
     }
 
     private function resetArpTable(): void
