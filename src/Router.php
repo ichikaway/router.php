@@ -7,7 +7,6 @@ use Arp\ArpCache;
 use Dump\Dump;
 use Network\Device;
 use Network\IpPacket;
-use Network\Netmask;
 use parallel\Runtime;
 use parallel\Channel;
 
@@ -34,12 +33,26 @@ class Router
     private readonly int $devCount;
     /** @var array<int, int> $devIpLong NICのIPアドレス(int) */
     private readonly array $devIpLong;
+    /** @var array<int, int> $devNetLong NICのネットワークアドレス(ip & netmask) */
+    private readonly array $devNetLong;
+    /** @var array<int, int> $devMaskLong NICのネットマスク(int) */
+    private readonly array $devMaskLong;
     /** @var array<int, string> $devMacBin NICのMACアドレス(6バイトバイナリ) */
     private readonly array $devMacBin;
+    /** @var array<int, string> $devName NIC名 */
+    private readonly array $devName;
+    /** @var array<int, string> $devIpStr NICのIPアドレス(文字列。ARP送信時のみ使用) */
+    private readonly array $devIpStr;
+    /** @var array<int, string> $devMacStr NICのMACアドレス(コロン区切り。ARP送信時のみ使用) */
+    private readonly array $devMacStr;
 
     private Dump $Dump;
 
     private array $defaultRouteTable = [];
+
+    /** デフォルトルートのnext hop(int)とNIC index。未設定なら null */
+    private ?int $defaultGwLong = null;
+    private ?int $defaultDevIdx = null;
 
     /**
      * 複数のプロセスでそれぞれ入力処理を分ける場合、どのNICでreadを待つか指定する
@@ -83,14 +96,26 @@ class Router
         $this->devices = $devices;
 
         // パケット毎のループ用にDeviceの情報を平坦な配列へ展開する
-        $devIpLong = $devMacBin = [];
+        $devIpLong = $devNetLong = $devMaskLong = $devMacBin = $devName = $devIpStr = $devMacStr = [];
         foreach ($devices as $Device) {
-            $devIpLong[] = $Device->getIpAddressLong();
-            $devMacBin[] = $Device->getBinaryMacAddress();
+            $ipLong   = $Device->getIpAddressLong();
+            $maskLong = $Device->getNetMaskLong();
+            $devIpLong[]   = $ipLong;
+            $devNetLong[]  = $ipLong & $maskLong;
+            $devMaskLong[] = $maskLong;
+            $devMacBin[]   = $Device->getBinaryMacAddress();
+            $devName[]     = $Device->getDeviceName();
+            $devIpStr[]    = $Device->getIpAddress();
+            $devMacStr[]   = $Device->getMacAddress();
         }
-        $this->devIpLong = $devIpLong;
-        $this->devMacBin = $devMacBin;
-        $this->devCount  = count($devIpLong);
+        $this->devIpLong   = $devIpLong;
+        $this->devNetLong  = $devNetLong;
+        $this->devMaskLong = $devMaskLong;
+        $this->devMacBin   = $devMacBin;
+        $this->devName     = $devName;
+        $this->devIpStr    = $devIpStr;
+        $this->devMacStr   = $devMacStr;
+        $this->devCount    = count($devIpLong);
     }
 
     public function setDefaultRoute(string $gwIp, string $netmask, string $deviceName): void
@@ -98,6 +123,14 @@ class Router
         $this->defaultRouteTable['gw'] = $gwIp;
         $this->defaultRouteTable['netmask'] = $netmask;
         $this->defaultRouteTable['device'] = $deviceName;
+
+        // 転送時はintのnext hopとNIC indexしか使わないのでここで引いておく
+        $idx = array_search($deviceName, $this->devName, true);
+        if ($idx === false) {
+            throw new \InvalidArgumentException("Unknown device for default route: {$deviceName}");
+        }
+        $this->defaultGwLong = ip2long($gwIp);
+        $this->defaultDevIdx = $idx;
     }
 
     public function getDefaultRoute(): array
@@ -253,9 +286,14 @@ class Router
         var_dump($this->devices);
 
         // パケット毎のループで $this-> のプロパティ参照をしないようローカル変数に退避する
-        $devCount      = $this->devCount;
-        $devIpLongList = $this->devIpLong;
-        $devMacBinList = $this->devMacBin;
+        $devCount        = $this->devCount;
+        $devIpLongList   = $this->devIpLong;
+        $devNetLongList  = $this->devNetLong;
+        $devMaskLongList = $this->devMaskLong;
+        $devMacBinList   = $this->devMacBin;
+        $devNameList     = $this->devName;
+        $defaultDevIdx   = $this->defaultDevIdx;
+        $defaultGwLong   = $this->defaultGwLong;
 
         while (true) {
             //$this->Dump->info("\n ===== start receive =====\n");
@@ -275,7 +313,8 @@ class Router
                 //$dstMac = unpack("H*", substr($pkt, 0, 6))[1];
                 // Deviceが持つMACアドレスはバイナリ6バイトなので、比較できるようバイナリのまま取り出す
                 $srcMac = substr($pkt, 6, 6);
-                $ethType = unpack("n", substr($pkt, 12, 2))[1]; // network-order (big endian)
+                // EtherTypeの2バイトはord()で合成する。unpack()はsubstrと結果配列を作るぶん遅い
+                $ethType = (ord($pkt[12]) << 8) | ord($pkt[13]); // network-order (big endian)
 
                 //$this->Dump->debug("  EtherType: 0x" . dechex($ethType) . "\n");
                 //$this->Dump->debug("  Src MAC: " . chunk_split(bin2hex($srcMac), 2, ':') . "\n");
@@ -297,7 +336,7 @@ class Router
                 //$ipHeaderLen = $ihl * 4;
 
                 //$srcIp = long2ip($ip["src"]);
-                $dstIp = long2ip($ip["dst"]);
+                // 転送処理はintのIPアドレスだけで行う。文字列への変換(long2ip)はARP未解決時のみ
                 $srcIpLong = $ip["src"];
                 $dstIpLong = $ip["dst"];
 
@@ -346,16 +385,33 @@ class Router
                 //
                 // 宛先IPを見て、自分と同じサブネットのIPアドレスであれば、該当NICからARPを送ってMACアドレスを取得
                 // 宛先MACアドレスをARPで取得したMACアドレスに差し替えて送信
-                try {
-                    list($dstIp, $Device) = $this->getNextHopByTargetIp($dstIp);
-                    $dstPkt = $this->createDestEtherFrame($pkt, $dstIp, $Device);
-                } catch (Exception $e) {
-                    //$this->Dump->error("No device found for routing." . $e->getMessage());
+                // 宛先IPと同じネットワークのNICを探す。見つからなければデフォルトルートへ
+                // メソッド呼び出しを避けるためここに展開している
+                $devIdx = -1;
+                $nextHopLong = $dstIpLong;
+                for ($d = 0; $d < $devCount; $d++) {
+                    if ($devNetLongList[$d] === ($dstIpLong & $devMaskLongList[$d])) {
+                        $devIdx = $d;
+                        break;
+                    }
+                }
+                if ($devIdx === -1) {
+                    if ($defaultDevIdx === null) {
+                        //$this->Dump->error("No device found for routing.");
+                        continue;
+                    }
+                    $devIdx = $defaultDevIdx;
+                    $nextHopLong = $defaultGwLong;
+                }
+
+                // 転送できないパケット(ARP未解決/TTL切れ)はnullが返るので捨てる。例外は生成コストが高いので使わない
+                $dstPkt = $this->createDestEtherFrame($pkt, $nextHopLong, $devIdx);
+                if ($dstPkt === null) {
                     continue;
                 }
 
-                //socket_write($this->sockets[$Device->getDeviceName()], $dstPkt, strlen($dstPkt));
-                $writeDeviceName = $Device->getDeviceName();
+                //socket_write($this->sockets[$devNameList[$devIdx]], $dstPkt, strlen($dstPkt));
+                $writeDeviceName = $devNameList[$devIdx];
                 $chan[$cnt]->send([$dstPkt, $writeDeviceName]);
                 $cnt++;
                 if ($cnt >= $this->workerCount) {
@@ -380,99 +436,71 @@ class Router
     }
 
     /**
-     * dstIpを見て転送するイーサフレームを作成する
-     * dstIpからMACアドレスをAPRで取得
+     * next hopのIPを見て転送するイーサフレームを作成する
+     * next hopのIPからMACアドレスをAPRで取得
      * イーサフレームのsrc/dst MACアドレスを書き換える
      * IPパケットのTTLを減らしてチェックサム再計算
      *
-     * @param string $data
-     * @param string $dstIp
-     * @param Device $Device
-     * @return string
-     * @throws Exception
+     * @param string $data フレーム全体
+     * @param int $nextHopLong next hopのIPアドレス(int)
+     * @param int $devIdx 送出するNICのindex
+     * @return string|null 転送できない場合はnull
      */
-    private function createDestEtherFrame(string $data, string $dstIp, Device $Device): string
+    private function createDestEtherFrame(string $data, int $nextHopLong, int $devIdx): ?string
     {
-        //$this->Dump->debug("NIC is {$Device->getDeviceName()}, DestIP: {$dstIp}, NIC IP: {$Device->getIpAddress()} \n");
-        $dstNewMac = $this->getMacAddress($dstIp, $Device->getIpAddress(), $Device->getMacAddress(), $Device->getDeviceName());
+        //$this->Dump->debug("NIC is {$this->devName[$devIdx]}, DestIP: " . long2ip($nextHopLong) . " \n");
+        $dstNewMac = $this->getMacAddress($nextHopLong, $devIdx);
         if ($dstNewMac === '') {
-            $ipHeader = substr($data, 14, 20); // IHL によっては20〜60バイト
-            $ip = unpack("Cversion_ihl/Ctos/nlength/nid/nflags_offset/Cttl/Cproto/nchecksum/Nsrc/Ndst", $ipHeader);
-            $srcIp = long2ip($ip["src"]);
-            $dstIp2 = long2ip($ip["dst"]);
-            $this->Dump->error("  IP: $srcIp → $dstIp2, proto: {$ip['proto']}, TTL: {$ip['ttl']}\n");
-
-            throw new Exception("Error dstNewMac is Null, IP: {$dstIp} \n");
+            return null;
         }
 
         //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
         //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
-        //$dstPkt = substr_replace($data, macToBinary($dstNewMac) . macToBinary($Device->getMacAddress()), 0, 12);
-        $dstPkt = substr_replace($data, macToBinary($dstNewMac) . $Device->getBinaryMacAddress(), 0, 12);
+        $dstPkt = substr_replace($data, macToBinary($dstNewMac) . $this->devMacBin[$devIdx], 0, 12);
         // substr_replaceの方が、下のsubstr組み合わせよりも少しはやい
-        //$dstPkt = macToBinary($dstNewMac) . macToBinary($Device->getMacAddress()) . substr($data, 12);
-        //$dstPkt = macToBinary($dstNewMac) . $Device->getBinaryMacAddress() . substr($data, 12);
+        //$dstPkt = macToBinary($dstNewMac) . $this->devMacBin[$devIdx] . substr($data, 12);
 
         //$this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
-        //$this->Dump->debug("dstPkt dstMAC: " . hexToMac(bin2hex(substr($dstPkt, 0, 6))) . "\n");
-        //$this->Dump->debug("dstPkt srcMAC: " . hexToMac(bin2hex(substr($dstPkt, 6, 6))) . "\n");
 
         //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
-        $dstPkt = IpPacket::decrementIPv4TtlAndFixChecksum($dstPkt);
-        if ($dstPkt == null) {
-            throw new Exception("dstPkt is null\n");
-        }
-        return $dstPkt;
+        return IpPacket::decrementIPv4TtlAndFixChecksum($dstPkt);
     }
 
-    private function getNextHopByTargetIp(string $dstIp): array
-    {
-        foreach ($this->devices as $Device) {
-            if (Netmask::isSameNetworkLong(ip2long($dstIp), $Device->getIpAddressLong(), $Device->getNetMaskLong())) {
-                //if (Netmask::isSameNetwork($dstIp, $Device->getIpAddress(), $Device->getNetmask())) {
-                return [$dstIp, $Device];
-            }
-        }
-        $default = $this->getDefaultRoute();
-        if (isset($default['gw'])) {
-            $Device = $this->devices[$default['device']];
-            $dstIp  = $default['gw'];
-            //$this->Dump->debug("Default GW:  {$default['device']}, gwIP: {$dstIp} \n");
-            return [$dstIp, $Device];
-        }
-        throw new \Exception("No route device.");
-    }
-
-    private function getMacAddress(string $dstIp, string $ip, string $mac, string $device): string
+    /**
+     * next hopのIP(int)からMACアドレスを返す。解決できなければ空文字
+     */
+    private function getMacAddress(int $nextHopLong, int $devIdx): string
     {
         // 過去にARPで解決したIPかキャッシュ検索
-        $resultFromCache = $this->arpTable->get($dstIp);
+        $resultFromCache = $this->arpTable->get($nextHopLong);
         if ($resultFromCache !== null) {
-            //$this->Dump->debug("Hit arp cache table. IP: {$dstIp},\n");
+            //$this->Dump->debug("Hit arp cache table.\n");
             return $resultFromCache;
         }
 
         // 過去にARPで解決できなかったIPのキャッシュを検索
-        $noResultFromCache = $this->arpNoResolveTable->get($dstIp);
+        $noResultFromCache = $this->arpNoResolveTable->get($nextHopLong);
         if ($noResultFromCache !== null) {
-            //$this->Dump->debug("Hit no result arp cache table. IP: {$dstIp},\n");
+            //$this->Dump->debug("Hit no result arp cache table.\n");
             return '';
         }
 
         // ARPキャッシュがヒットしなかったのでARPリクエストを送信して探す
-        //$this->Dump->debugArp("start Arp IP: {$ip}\n");
-        $Arp = new Arp($ip, $mac, $device);
+        // ここは初回のみ通るので、int -> 文字列のIPアドレス変換もここでだけ行う
+        $dstIp = long2ip($nextHopLong);
+        //$this->Dump->debugArp("start Arp IP: {$dstIp}\n");
+        $Arp = new Arp($this->devIpStr[$devIdx], $this->devMacStr[$devIdx], $this->devName[$devIdx]);
         $dstNewMac = $Arp->sendArpRequest($dstIp);
         //$this->Dump->debugArp("end Arp MAC: {$dstNewMac}\n");
 
         if ($dstNewMac === '') {
             // ARP解決できなかったIPをキャッシュ
-            $this->arpNoResolveTable->add($dstIp, '');
+            $this->arpNoResolveTable->add($nextHopLong, '');
             return '';
         }
 
         // ARP解決したIPをキャッシュ
-        $this->arpTable->add($dstIp, $dstNewMac);
+        $this->arpTable->add($nextHopLong, $dstNewMac);
 
         //$this->Dump->debug("=== ARP reply ===\n");
         //$this->Dump->debug("Dest MAC(bin2hex: " . bin2hex($dstNewMac));

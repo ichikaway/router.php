@@ -18,13 +18,14 @@ class ArpCache
         }
     }
 
-    public function add(string $key, string $value): bool
+    // キーはIPアドレスのint表現。文字列キーのハッシュ計算を避けるためintで持つ
+    public function add(int $key, string $value): bool
     {
         $this->arpTable[$key] = $value;
         return true;
     }
 
-    public function get(string $key): ?string
+    public function get(int $key): ?string
     {
         if (isset($this->arpTable[$key])) {
             // 一定回数以上参照できた場合は念のためキャッシュをクリアしてもう一度Arpを検索する
