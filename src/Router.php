@@ -28,6 +28,15 @@ class Router
     /** @var array<string, Socket> $sockets */
     private readonly array $sockets;
 
+    /**
+     * パケット毎のループでメソッド呼び出しをしないよう、Deviceの情報をindex付きの平坦な配列に前計算しておく
+     */
+    private readonly int $devCount;
+    /** @var array<int, int> $devIpLong NICのIPアドレス(int) */
+    private readonly array $devIpLong;
+    /** @var array<int, string> $devMacBin NICのMACアドレス(6バイトバイナリ) */
+    private readonly array $devMacBin;
+
     private Dump $Dump;
 
     private array $defaultRouteTable = [];
@@ -72,6 +81,16 @@ class Router
         }
         $this->sockets = $sockets;
         $this->devices = $devices;
+
+        // パケット毎のループ用にDeviceの情報を平坦な配列へ展開する
+        $devIpLong = $devMacBin = [];
+        foreach ($devices as $Device) {
+            $devIpLong[] = $Device->getIpAddressLong();
+            $devMacBin[] = $Device->getBinaryMacAddress();
+        }
+        $this->devIpLong = $devIpLong;
+        $this->devMacBin = $devMacBin;
+        $this->devCount  = count($devIpLong);
     }
 
     public function setDefaultRoute(string $gwIp, string $netmask, string $deviceName): void
@@ -232,6 +251,12 @@ class Router
 
 
         var_dump($this->devices);
+
+        // パケット毎のループで $this-> のプロパティ参照をしないようローカル変数に退避する
+        $devCount      = $this->devCount;
+        $devIpLongList = $this->devIpLong;
+        $devMacBinList = $this->devMacBin;
+
         while (true) {
             //$this->Dump->info("\n ===== start receive =====\n");
 
@@ -286,28 +311,29 @@ class Router
 
                 //hexDump($payload) ;
 
-                foreach($this->devices as $Device) {
+                //todo
+                // 同じネットワークのブロードキャストアドレスだった場合はスルーする
+                // ブロードキャストアドレスはルーティング対象ではないことと、処理をする場合はARPでMACアドレスの解決ができず処理がそこで詰まるため
+                // 255.255.255.255は無視する、同じネットワークのブロードキャストアドレスか判定する
+                // NICに依存しない判定なのでNICのループの外に出してNIC数分の評価をやめる
+                if (($dstIpLong & 0x000000FF) === 0x000000FF) {
+                    continue;
+                }
+
+                for ($d = 0; $d < $devCount; $d++) {
                     // 自分のNIC宛のIPアドレスの場合はスルーする。
-                    if (in_array($Device->getIpAddressLong(), [$srcIpLong, $dstIpLong])) {
-                        //if (in_array($Device->getIpAddress(), [$srcIp, $dstIp])) {
+                    // in_array()は毎回配列を確保するうえ緩い比較になるので === の比較にする
+                    $devIpLong = $devIpLongList[$d];
+                    if ($devIpLong === $srcIpLong || $devIpLong === $dstIpLong) {
                         //$this->Dump->debug("Skip: Same IP of NIC\n");
                         continue 2; // whileループのcontinueを行う
                     }
 
                     // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
-                    if ($srcMac === $Device->getBinaryMacAddress()) {
-                        //$this->Dump->debug("Skip: packet from my NIC({$Device->getDeviceName()}). nothing to do. \n");
+                    if ($srcMac === $devMacBinList[$d]) {
+                        //$this->Dump->debug("Skip: packet from my NIC. nothing to do. \n");
                         continue 2;
                     }
-
-                    //todo
-                    // 同じネットワークのブロードキャストアドレスだった場合はスルーする
-                    // ブロードキャストアドレスはルーティング対象ではないことと、処理をする場合はARPでMACアドレスの解決ができず処理がそこで詰まるため
-                    // 255.255.255.255は無視する、同じネットワークのブロードキャストアドレスか判定する
-                    if (($ip["dst"] & 0x000000FF) === 0x000000FF) {
-                        continue 2;
-                    }
-
                 }
 
                 //$this->Dump->debug("srcMac: ".$srcMac);
