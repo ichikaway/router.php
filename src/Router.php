@@ -6,7 +6,6 @@ use Arp\Arp;
 use Arp\ArpCache;
 use Dump\Dump;
 use Network\Device;
-use Network\IpPacket;
 use parallel\Runtime;
 use parallel\Channel;
 
@@ -454,16 +453,39 @@ class Router
             return null;
         }
 
+        // イーサヘッダ直後がIPv4ヘッダ(呼び出し元でEtherType=0x0800を確認済み)なので
+        // TTLは offset 22、IPヘッダチェックサムは offset 24-25 に固定で決まる
+        if (strlen($data) < 34) {
+            return null;
+        }
+
+        $ttl = ord($data[22]);
+        // TTL<=1 はルータ動作としては Time Exceeded 対象。ここではドロップ扱い。
+        if ($ttl <= 1) {
+            return null;
+        }
+
+        // チェックサムは全再計算せず差分更新する(RFC1624)
+        // TTLが1減る = ヘッダ中の16bitワードが 0x0100 減る => チェックサムに 0x0100 を1の補数加算すればよい
+        $cksum = (ord($data[24]) << 8) | ord($data[25]);
+        $cksum += 0x0100;
+        if ($cksum > 0xFFFF) {
+            $cksum = ($cksum & 0xFFFF) + 1; // end-around carry
+        }
+
         //  該当ネットワークの自身のNICのMACアドレスを、送信パケットの送信元MACに設定
         //  宛先IPのMACアドレスを、送信パケットの送信先MACに設定
         $dstPkt = substr_replace($data, $dstNewMac . $this->devMacBin[$devIdx], 0, 12);
-        // substr_replaceの方が、下のsubstr組み合わせよりも少しはやい
-        //$dstPkt = $dstNewMac . $this->devMacBin[$devIdx] . substr($data, 12);
+
+        // ここで $dstPkt は refcount=1 なので、1バイトずつの書き換えはコピーが発生せずin-placeで済む。
+        // 別関数に渡すと参照カウントが増えてフレーム全体のコピーが1回余分に走るため、あえてこの関数内で完結させている
+        $dstPkt[22] = chr($ttl - 1);
+        $dstPkt[24] = chr($cksum >> 8);
+        $dstPkt[25] = chr($cksum & 0xFF);
 
         //$this->Dump->debug("dstPkt: " . bin2hex($dstPkt) . "\n");
 
-        //  IPヘッダのTTLを一つ減らしてチェックサムを再計算する
-        return IpPacket::decrementIPv4TtlAndFixChecksum($dstPkt);
+        return $dstPkt;
     }
 
     /**
