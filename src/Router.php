@@ -248,14 +248,12 @@ class Router
                 // --- Ethernet header (14 bytes)
                 $pkt = $data;
                 //$dstMac = unpack("H*", substr($pkt, 0, 6))[1];
-                $srcMac = unpack("H*", substr($pkt, 6, 6))[1];
+                // Deviceが持つMACアドレスはバイナリ6バイトなので、比較できるようバイナリのまま取り出す
+                $srcMac = substr($pkt, 6, 6);
                 $ethType = unpack("n", substr($pkt, 12, 2))[1]; // network-order (big endian)
 
-                //$srcMacHex = hexToMac($srcMac);
-
                 //$this->Dump->debug("  EtherType: 0x" . dechex($ethType) . "\n");
-                //$this->Dump->debug("  Src MAC: " . chunk_split($srcMac, 2, ':') . "\n");
-                //$this->Dump->debug("  Dst MAC: " . chunk_split($dstMac, 2, ':') . "\n");
+                //$this->Dump->debug("  Src MAC: " . chunk_split(bin2hex($srcMac), 2, ':') . "\n");
 
                 if ($ethType !== 0x0800) {
                     //$this->Dump->debug("  Not IPv4, skipping...\n");
@@ -298,9 +296,7 @@ class Router
 
                     // src MACがルータのNICの場合は、ルータから外に転送する際のパケットのためこれは処理しない
                     if ($srcMac === $Device->getBinaryMacAddress()) {
-                    //if ($srcMacHex === $Device->getMacAddress()) {
                         //$this->Dump->debug("Skip: packet from my NIC({$Device->getDeviceName()}). nothing to do. \n");
-                        echo "same data nic";
                         continue 2;
                     }
 
