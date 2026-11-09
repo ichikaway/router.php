@@ -10,6 +10,7 @@ use Network\Device;
 use Network\IpPacket;
 use Network\Netmask;
 use Sound\SendSoundMessage;
+use Tls\SniExtractor;
 use Voicevox\SendVoiceMessage;
 
 class Router
@@ -34,6 +35,8 @@ class Router
     private SendVoiceMessage $Voice;
 
     private H1Extractor $H1Extractor;
+
+    private SniExtractor $SniExtractor;
 
     private array $defaultRouteTable = [];
 
@@ -60,6 +63,7 @@ class Router
         $this->Sound = new SendSoundMessage('127.0.0.1', 57120);
         $this->Voice = new SendVoiceMessage('127.0.0.1', 9876);
         $this->H1Extractor = new H1Extractor();
+        $this->SniExtractor = new SniExtractor();
 
         /** @var Device $Device */
         foreach ($nic as $Device) {
@@ -327,10 +331,10 @@ class Router
                         }
                     }
 
-                    // HTTP(送信元port 80)のレスポンスの場合は <h1> の中身をVoicevoxに送って読み上げる
+                    // HTTPレスポンスの<h1>の中身 / HTTPSの接続先FQDN(SNI) をVoicevoxに送って読み上げる
                     $protoTcp = 6;
                     if ($ip['proto'] === $protoTcp) {
-                        $this->speakHttpH1($pkt, $ipHeaderLen, $ip['length'], $srcIp, $dstIp2);
+                        $this->speakTcpPayload($pkt, $ipHeaderLen, $ip['length'], $srcIp, $dstIp2);
                     }
                 //}
             }
@@ -339,16 +343,18 @@ class Router
     }
 
     /**
-     * HTTPレスポンス(送信元ポート80)のTCPペイロードから <h1> の中身を取り出してVoicevoxに送る
+     * TCPのペイロードを見てVoicevoxに読み上げ文字列を送る
+     *  - HTTPレスポンス(送信元ポート80): <h1> の中身
+     *  - HTTPS(宛先ポート443)のTLS ClientHello: SNIの接続先FQDN
      */
-    private function speakHttpH1(string $pkt, int $ipHeaderLen, int $ipTotalLen, string $srcIp, string $dstIp): void
+    private function speakTcpPayload(string $pkt, int $ipHeaderLen, int $ipTotalLen, string $srcIp, string $dstIp): void
     {
         $tcpStart = 14 + $ipHeaderLen;
         if (strlen($pkt) < $tcpStart + 20) {
             return;
         }
         $tcp = unpack("nsrcPort/ndstPort/Nseq/Nack/Coffset/Cflags", $pkt, $tcpStart);
-        if ($tcp['srcPort'] !== 80) {
+        if ($tcp['srcPort'] !== 80 && $tcp['dstPort'] !== 443) {
             return;
         }
         $tcpHeaderLen = ($tcp['offset'] >> 4) * 4;
@@ -359,8 +365,22 @@ class Router
         $closing = ($tcp['flags'] & 0x05) !== 0; // FIN or RST
         $flowKey = "{$srcIp}:{$tcp['srcPort']}>{$dstIp}:{$tcp['dstPort']}";
 
-        foreach ($this->H1Extractor->feed($flowKey, $tcp['seq'], $payload, $closing) as $text) {
-            echo "h1 voice: {$text}\n";
+        $texts = [];
+        if ($tcp['srcPort'] === 80) {
+            $h1tags = $this->H1Extractor->feed($flowKey, $tcp['seq'], $payload, $closing);
+            if (count($h1tags) > 0) {
+                $texts[] = '丸見えだよ。レスポンスの中身は、' . $h1tags[0];
+            }
+            var_dump($texts);
+        } else {
+            $fqdn = $this->SniExtractor->feed($flowKey, $tcp['seq'], $payload, $closing);
+            if ($fqdn !== null) {
+                $texts[] = '暗号化されてて読めないので接続先だけ. '.$fqdn;
+            }
+        }
+
+        foreach ($texts as $text) {
+            echo "tcp voice: {$text}\n";
             foreach ($this->Voice->send($text) as $err) {
                 $this->Dump->error("voicevox: {$err}\n");
             }
