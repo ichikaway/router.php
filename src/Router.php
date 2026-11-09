@@ -9,6 +9,7 @@ use Network\Device;
 use Network\IpPacket;
 use Network\Netmask;
 use Sound\SendSoundMessage;
+use Voicevox\SendVoiceMessage;
 
 class Router
 {
@@ -28,6 +29,8 @@ class Router
     private Dump $Dump;
 
     private SendSoundMessage $Sound;
+
+    private SendVoiceMessage $Voice;
 
     private array $defaultRouteTable = [];
 
@@ -52,6 +55,7 @@ class Router
         $this->arpNoResolveTable = new ArpCache(10); //ARPで解決できなかったIPのキャッシュテーブル。10回テーブル検索でクリアする
 
         $this->Sound = new SendSoundMessage('127.0.0.1', 57120);
+        $this->Voice = new SendVoiceMessage('127.0.0.1', 9876);
 
         /** @var Device $Device */
         foreach ($nic as $Device) {
@@ -232,6 +236,19 @@ class Router
                 //hexDump($payload) ;
 
                 foreach($this->devices as $Device) {
+                    /*
+                    $protoIcmp = 1;
+                    if ($ip['proto'] === $protoIcmp) {
+                        echo "ping\n";
+                        continue;
+                    }
+                    $protoIcmpRes = 8;
+                    if ($ip['proto'] === $protoIcmpRes) {
+                        echo "pong\n";
+                        continue;
+                    }
+                     */
+
                     // 自分のNIC宛のIPアドレスの場合はスルーする。
                     if (in_array($Device->getIpAddress(), [$srcIp, $dstIp])) {
                         $this->Dump->debug("Skip: Same IP of NIC\n");
@@ -286,13 +303,26 @@ class Router
                 }
                 */
 
-                $typePing = 1;
-                if ($this->handleNic == 'eth0' && $ip['proto'] == $typePing) {
+
+                //if ($this->handleNic == 'eth0') {
                     $dstIp2 = long2ip($ip["dst"]);
                     echo ("  IP: $srcIp → $dstIp2, proto: {$ip['proto']}, TTL: {$ip['ttl']}\n");
                     //$this->Sound->sendOsc();
-                    $this->Sound->sendOscByPacketSize(strlen($dstPkt));
-                }
+                    //$this->Sound->sendOscByPacketSize(strlen($dstPkt));
+
+                    // pingの場合はVoicevoxのサーバ(voicevox_udpd.php -play)に文字を送って読み上げる
+                    $protoIcmp = 1;
+                    $icmpEchoRequest = 8;
+                    if ($ip['proto'] === $protoIcmp
+                        && isset($pkt[14 + $ipHeaderLen])
+                        && ord($pkt[14 + $ipHeaderLen]) === $icmpEchoRequest
+                    ) {
+                        echo "ping voice\n";
+                        foreach ($this->Voice->send('ping') as $err) {
+                            $this->Dump->error("voicevox: {$err}\n");
+                        }
+                    }
+                //}
             }
 
         }
