@@ -6,6 +6,7 @@ use Arp\Arp;
 use Arp\ArpCache;
 use Dump\Dump;
 use Http\H1Extractor;
+use Http\PoweredByChecker;
 use Network\Device;
 use Network\IpPacket;
 use Network\Netmask;
@@ -38,6 +39,8 @@ class Router
 
     private SniExtractor $SniExtractor;
 
+    private PoweredByChecker $PoweredByChecker;
+
     private array $defaultRouteTable = [];
 
     private $pingCounter = 0;
@@ -66,6 +69,7 @@ class Router
         $this->Voice = new SendVoiceMessage('127.0.0.1', 9876);
         $this->H1Extractor = new H1Extractor();
         $this->SniExtractor = new SniExtractor();
+        $this->PoweredByChecker = new PoweredByChecker();
 
         /** @var Device $Device */
         foreach ($nic as $Device) {
@@ -376,11 +380,20 @@ class Router
 
         $texts = [];
         if ($tcp['srcPort'] === 80) {
-            $h1tags = $this->H1Extractor->feed($flowKey, $tcp['seq'], $payload, $closing);
-            if (count($h1tags) > 0) {
-                $texts[] = '丸見えだよ。レスポンスの中身は、' . $h1tags[0];
+            // レスポンスヘッダの X-Powered-By: PHP/x.y.z が 8.5.12 未満なら脆弱と言う (ヘッダはh1より先に届く)
+            $phpVersion = $this->PoweredByChecker->feed($flowKey, $tcp['seq'], $payload, $closing);
+            if ($phpVersion !== null) {
+                $texts[] = PoweredByChecker::isVulnerable($phpVersion)
+                    ? "PHP {$phpVersion}、脆弱です！"
+                    : "PHP {$phpVersion}、安全なPHPです！";
             }
-            var_dump($texts);
+
+            if (count($texts) === 0) {
+                $h1tags = $this->H1Extractor->feed($flowKey, $tcp['seq'], $payload, $closing);
+                if (count($h1tags) > 0) {
+                    $texts[] = '丸見えだよ。レスポンスの中身は、' . $h1tags[0];
+                }
+            }
         } else {
             $fqdn = $this->SniExtractor->feed($flowKey, $tcp['seq'], $payload, $closing);
             if ($fqdn !== null) {
@@ -388,6 +401,7 @@ class Router
             }
         }
 
+        var_dump($texts);
         foreach ($texts as $text) {
             echo "tcp voice: {$text}\n";
             foreach ($this->Voice->send($text) as $err) {
