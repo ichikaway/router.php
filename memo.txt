@@ -150,6 +150,8 @@ Mac側
 sudo route add -net 172.16.0.0/24 192.168.11.20
 curl 'http://example.com/2.html' --resolve example.com:80:172.16.0.21
 curl -k 'https://example.com/2.html' --resolve example.com:443:172.16.0.21
+curl 'http://example.com/php/' --resolve example.com:80:172.16.0.21
+
 
 ラズパイ500+側
 cd ~/voicevox

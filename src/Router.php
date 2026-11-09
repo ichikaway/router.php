@@ -40,6 +40,8 @@ class Router
 
     private array $defaultRouteTable = [];
 
+    private $pingCounter = 0;
+
     /**
      * 複数のプロセスでそれぞれ入力処理を分ける場合、どのNICでreadを待つか指定する
      * @var string|null
@@ -326,8 +328,15 @@ class Router
                         && ord($pkt[14 + $ipHeaderLen]) === $icmpEchoRequest
                     ) {
                         echo "ping voice\n";
-                        foreach ($this->Voice->send('ping') as $err) {
-                            $this->Dump->error("voicevox: {$err}\n");
+                        $this->pingCounter++;
+                        if ($this->pingCounter % 5 == 0) {
+                            foreach ($this->Voice->send('もうやめて') as $err) {
+                                $this->Dump->error("voicevox: {$err}\n");
+                            }
+                        } else {
+                            foreach ($this->Voice->send('ping') as $err) {
+                                $this->Dump->error("voicevox: {$err}\n");
+                            }
                         }
                     }
 
@@ -375,7 +384,7 @@ class Router
         } else {
             $fqdn = $this->SniExtractor->feed($flowKey, $tcp['seq'], $payload, $closing);
             if ($fqdn !== null) {
-                $texts[] = '暗号化されてて読めないので接続先だけ. '.$fqdn;
+                $texts[] = '暗号化されてて読めません。接続先は. '.$fqdn;
             }
         }
 
