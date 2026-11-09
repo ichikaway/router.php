@@ -5,6 +5,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use Arp\Arp;
 use Arp\ArpCache;
 use Dump\Dump;
+use Http\H1Extractor;
 use Network\Device;
 use Network\IpPacket;
 use Network\Netmask;
@@ -32,6 +33,8 @@ class Router
 
     private SendVoiceMessage $Voice;
 
+    private H1Extractor $H1Extractor;
+
     private array $defaultRouteTable = [];
 
     /**
@@ -56,6 +59,7 @@ class Router
 
         $this->Sound = new SendSoundMessage('127.0.0.1', 57120);
         $this->Voice = new SendVoiceMessage('127.0.0.1', 9876);
+        $this->H1Extractor = new H1Extractor();
 
         /** @var Device $Device */
         foreach ($nic as $Device) {
@@ -322,9 +326,44 @@ class Router
                             $this->Dump->error("voicevox: {$err}\n");
                         }
                     }
+
+                    // HTTP(送信元port 80)のレスポンスの場合は <h1> の中身をVoicevoxに送って読み上げる
+                    $protoTcp = 6;
+                    if ($ip['proto'] === $protoTcp) {
+                        $this->speakHttpH1($pkt, $ipHeaderLen, $ip['length'], $srcIp, $dstIp2);
+                    }
                 //}
             }
 
+        }
+    }
+
+    /**
+     * HTTPレスポンス(送信元ポート80)のTCPペイロードから <h1> の中身を取り出してVoicevoxに送る
+     */
+    private function speakHttpH1(string $pkt, int $ipHeaderLen, int $ipTotalLen, string $srcIp, string $dstIp): void
+    {
+        $tcpStart = 14 + $ipHeaderLen;
+        if (strlen($pkt) < $tcpStart + 20) {
+            return;
+        }
+        $tcp = unpack("nsrcPort/ndstPort/Nseq/Nack/Coffset/Cflags", $pkt, $tcpStart);
+        if ($tcp['srcPort'] !== 80) {
+            return;
+        }
+        $tcpHeaderLen = ($tcp['offset'] >> 4) * 4;
+        // イーサネットのパディングを含めないよう、IPの全長からペイロード長を求める
+        $payloadLen = $ipTotalLen - $ipHeaderLen - $tcpHeaderLen;
+        $payload = $payloadLen > 0 ? substr($pkt, $tcpStart + $tcpHeaderLen, $payloadLen) : '';
+
+        $closing = ($tcp['flags'] & 0x05) !== 0; // FIN or RST
+        $flowKey = "{$srcIp}:{$tcp['srcPort']}>{$dstIp}:{$tcp['dstPort']}";
+
+        foreach ($this->H1Extractor->feed($flowKey, $tcp['seq'], $payload, $closing) as $text) {
+            echo "h1 voice: {$text}\n";
+            foreach ($this->Voice->send($text) as $err) {
+                $this->Dump->error("voicevox: {$err}\n");
+            }
         }
     }
 
