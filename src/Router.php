@@ -384,7 +384,7 @@ class Router
             $phpVersion = $this->PoweredByChecker->feed($flowKey, $tcp['seq'], $payload, $closing);
             if ($phpVersion !== null) {
                 $texts[] = PoweredByChecker::isVulnerable($phpVersion)
-                    ? "PHP {$phpVersion}、脆弱です！"
+                    ? "PHP {$phpVersion}、脆弱です！世間を賑わせてるやつです"
                     : "PHP {$phpVersion}、安全なPHPです！";
             }
 
